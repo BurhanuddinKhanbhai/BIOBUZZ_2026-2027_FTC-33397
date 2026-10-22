@@ -5,6 +5,7 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.sensors.BallColorSensor;
 
@@ -106,12 +107,20 @@ public class Shooter {
         targetVelocity = ticksPerSecond;
     }
 
-    /** Commands zero velocity without resetting encoders; the flywheels may still be slowing. */
+    /** Attempts both zero-velocity commands independently; failures are logged, encoders retained. */
     public void stop() {
         trackingStableTime = false;
         targetVelocity = 0.0;
-        flywheelA.setVelocity(0.0);
-        flywheelB.setVelocity(0.0);
+        try {
+            flywheelA.setVelocity(0.0);
+        } catch (RuntimeException e) {
+            RobotLog.ee("Shooter", e, "Failed to stop flywheelA");
+        }
+        try {
+            flywheelB.setVelocity(0.0);
+        } catch (RuntimeException e) {
+            RobotLog.ee("Shooter", e, "Failed to stop flywheelB");
+        }
     }
 
     public double getTargetVelocity() {

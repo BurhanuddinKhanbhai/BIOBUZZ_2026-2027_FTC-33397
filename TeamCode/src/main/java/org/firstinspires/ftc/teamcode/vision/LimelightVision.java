@@ -4,6 +4,9 @@ import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 /** Exposes fresh angular/area measurements from an explicitly selected Limelight pipeline. */
 public class LimelightVision {
     private final Limelight3A limelight;
@@ -12,6 +15,12 @@ public class LimelightVision {
     private boolean pipelineSelected;
     private LLResult result;
     private String status;
+
+    private LLResult validatedResult;
+    private double targetTx = Double.NaN;
+    private double targetTy = Double.NaN;
+    private double targetTa = Double.NaN;
+    private int resultPipelineIndex = -1;
 
     private double frameTimestamp = Double.NaN;
     private long frameFirstSeenNanos;
@@ -91,6 +100,7 @@ public class LimelightVision {
             if (result == null) {
                 return;
             }
+            validateMeasurements(result);
             double timestamp = result.getTimestamp();
             long age = result.getStaleness();
             if (isFinite(timestamp) && timestamp > 0.0 && age >= 0 && timestamp != frameTimestamp) {
@@ -112,17 +122,17 @@ public class LimelightVision {
 
     /** Horizontal offset from the configured crosshair in degrees, or NaN if unavailable. */
     public double getTx() {
-        return hasTarget() ? result.getTx() : Double.NaN;
+        return hasTarget() ? targetTx : Double.NaN;
     }
 
     /** Vertical offset from the configured crosshair in degrees, or NaN if unavailable. */
     public double getTy() {
-        return hasTarget() ? result.getTy() : Double.NaN;
+        return hasTarget() ? targetTy : Double.NaN;
     }
 
     /** Target area as a percentage of the image (0-100), or NaN if unavailable. */
     public double getTa() {
-        return hasTarget() ? result.getTa() : Double.NaN;
+        return hasTarget() ? targetTa : Double.NaN;
     }
 
     /**
@@ -220,12 +230,15 @@ public class LimelightVision {
         if (!result.isValid()) {
             return "NO_TARGET";
         }
-        if (result.getPipelineIndex() != pipelineIndex) {
+        if (resultPipelineIndex < 0) {
+            return "INVALID_RESULT";
+        }
+        if (resultPipelineIndex != pipelineIndex) {
             return "PIPELINE_MISMATCH";
         }
         if (!isFinite(result.getTimestamp()) || result.getTimestamp() <= 0.0
-                || !isFinite(result.getTx()) || !isFinite(result.getTy())
-                || !isFinite(result.getTa()) || result.getTa() < 0.0 || result.getTa() > 100.0) {
+                || !isFinite(targetTx) || !isFinite(targetTy)
+                || !isFinite(targetTa) || targetTa < 0.0 || targetTa > 100.0) {
             return "INVALID_RESULT";
         }
         if (waitingForNewFrame) {
@@ -236,6 +249,47 @@ public class LimelightVision {
             return "INVALID_RESULT";
         }
         return age <= maxResultAgeMillis ? "TARGET" : "STALE";
+    }
+
+    /**
+     * SDK 11.1.0 exposes raw JSON only through toString(); its measurement/pipeline getters
+     * can substitute zero or coerce nonnumeric fields. Parse once per SDK result object,
+     * including invalid results. Timestamp-based frozen-frame tracking remains separate.
+     */
+    private void validateMeasurements(LLResult latest) {
+        if (latest == validatedResult) {
+            return;
+        }
+        validatedResult = latest;
+        targetTx = targetTy = targetTa = Double.NaN;
+        resultPipelineIndex = -1;
+        try {
+            JSONObject json = new JSONObject(latest.toString());
+            double tx = getFiniteNumber(json, "tx");
+            double ty = getFiniteNumber(json, "ty");
+            double ta = getFiniteNumber(json, "ta");
+            double pipeline = getFiniteNumber(json, "pID");
+            // Require actual pipeline metadata; optInt's default zero is not evidence of pipeline 0.
+            if (!isFinite(pipeline) || pipeline < 0.0 || pipeline > Integer.MAX_VALUE
+                    || pipeline != Math.rint(pipeline)) {
+                return;
+            }
+            resultPipelineIndex = (int) pipeline;
+            targetTx = tx;
+            targetTy = ty;
+            targetTa = ta;
+        } catch (JSONException e) {
+            // Leave the cached measurements invalid; do not retry parsing this same result.
+        }
+    }
+
+    private static double getFiniteNumber(JSONObject json, String key) {
+        Object value = json.opt(key);
+        if (!(value instanceof Number)) {
+            return Double.NaN;
+        }
+        double number = ((Number) value).doubleValue();
+        return isFinite(number) ? number : Double.NaN;
     }
 
     private boolean selectPipeline() {

@@ -4,6 +4,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.util.RobotLog;
 
 /** Robot-centric control for a conventional X-pattern mecanum drivetrain. */
 public class DriveTrain {
@@ -81,9 +82,32 @@ public class DriveTrain {
                 (bl / denominator) * speedScale, (br / denominator) * speedScale);
     }
 
-    /** Stops all motors without changing motor modes or encoder counts. */
+    /** Attempts every motor stop independently, logging failures without resetting encoders. */
     public void stop() {
-        applyPowers(0.0, 0.0, 0.0, 0.0);
+        try {
+            frontLeft.setPower(0.0);
+            frontLeftPower = 0.0;
+        } catch (RuntimeException e) {
+            RobotLog.ee("DriveTrain", e, "Failed to stop frontLeft");
+        }
+        try {
+            frontRight.setPower(0.0);
+            frontRightPower = 0.0;
+        } catch (RuntimeException e) {
+            RobotLog.ee("DriveTrain", e, "Failed to stop frontRight");
+        }
+        try {
+            backLeft.setPower(0.0);
+            backLeftPower = 0.0;
+        } catch (RuntimeException e) {
+            RobotLog.ee("DriveTrain", e, "Failed to stop backLeft");
+        }
+        try {
+            backRight.setPower(0.0);
+            backRightPower = 0.0;
+        } catch (RuntimeException e) {
+            RobotLog.ee("DriveTrain", e, "Failed to stop backRight");
+        }
     }
 
     /**

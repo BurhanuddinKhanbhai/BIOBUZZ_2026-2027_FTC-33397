@@ -16,20 +16,22 @@ import com.bylazar.field.Style;
 import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
 import com.pedropathing.follower.Follower;
+import com.pedropathing.ftc.drivetrains.Mecanum;
 import com.pedropathing.geometry.*;
 import com.pedropathing.math.*;
 import com.pedropathing.paths.*;
 import com.pedropathing.telemetry.SelectableOpMode;
 import com.pedropathing.util.*;
-import static com.pedropathing.math.MathFunctions.quadraticFit;
 
-import android.annotation.SuppressLint;
 
 import com.qualcomm.hardware.lynx.LynxModule;
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.AnalogInput;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
+import com.qualcomm.robotcore.util.RobotLog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,9 +43,16 @@ import java.util.List;
  * @version 1.0, 6/26/2025
  */
 @Configurable
+// Powered tuning requires a configured and verified mecanum drivetrain and three-wheel localizer.
+@Disabled
 @TeleOp(name = "Tuning", group = "Pedro Pathing")
 public class Tuning extends SelectableOpMode {
     public static Follower follower;
+
+    // Software watchdog, not a calibration value. Shorten for the available test space.
+    public static double POWERED_TIMEOUT_SECONDS = 30.0;
+    private static boolean motionStopped;
+    static SafeTuning activeTest;
 
     @IgnoreConfigurable
     static PoseHistory poseHistory;
@@ -57,34 +66,34 @@ public class Tuning extends SelectableOpMode {
     public Tuning() {
         super("Select a Tuning OpMode", s -> {
             s.folder("Localization", l -> {
-                l.add("Localization Test", LocalizationTest::new);
-                l.add("Offsets Tuner", OffsetsTuner::new);
-                l.add("Forward Tuner", ForwardTuner::new);
-                l.add("Lateral Tuner", LateralTuner::new);
-                l.add("Turn Tuner", TurnTuner::new);
+                l.add("Localization Test", () -> new SafeTuning(new LocalizationTest(), true));
+                l.add("Offsets Tuner", () -> new SafeTuning(new OffsetsTuner(), false));
+                l.add("Forward Tuner", () -> new SafeTuning(new ForwardTuner(), false));
+                l.add("Lateral Tuner", () -> new SafeTuning(new LateralTuner(), false));
+                l.add("Turn Tuner", () -> new SafeTuning(new TurnTuner(), false));
             });
             s.folder("Automatic", a -> {
-                a.add("Forward Velocity Tuner", ForwardVelocityTuner::new);
-                a.add("Lateral Velocity Tuner", LateralVelocityTuner::new);
-                a.add("Forward Zero Power Acceleration Tuner", ForwardZeroPowerAccelerationTuner::new);
-                a.add("Lateral Zero Power Acceleration Tuner", LateralZeroPowerAccelerationTuner::new);
-                a.add("Predictive Braking Tuner", PredictiveBrakingTuner::new);
+                a.add("Forward Velocity Tuner", () -> new SafeTuning(new ForwardVelocityTuner(), true));
+                a.add("Lateral Velocity Tuner", () -> new SafeTuning(new LateralVelocityTuner(), true));
+                a.add("Forward Zero Power Acceleration Tuner", () -> new SafeTuning(new ForwardZeroPowerAccelerationTuner(), true));
+                a.add("Lateral Zero Power Acceleration Tuner", () -> new SafeTuning(new LateralZeroPowerAccelerationTuner(), true));
+                a.add("Predictive Braking Tuner", () -> new SafeTuning(new PredictiveBrakingTuner(), true));
             });
             s.folder("Manual", p -> {
-                p.add("Translational Tuner", TranslationalTuner::new);
-                p.add("Heading Tuner", HeadingTuner::new);
-                p.add("Drive Tuner", DriveTuner::new);
-                p.add("Centripetal Tuner", CentripetalTuner::new);
+                p.add("Translational Tuner", () -> new SafeTuning(new TranslationalTuner(), true));
+                p.add("Heading Tuner", () -> new SafeTuning(new HeadingTuner(), true));
+                p.add("Drive Tuner", () -> new SafeTuning(new DriveTuner(), true));
+                p.add("Centripetal Tuner", () -> new SafeTuning(new CentripetalTuner(), true));
             });
             s.folder("Tests", p -> {
-                p.add("Line", Line::new);
-                p.add("Triangle", Triangle::new);
-                p.add("Circle", Circle::new);
+                p.add("Line", () -> new SafeTuning(new Line(), true));
+                p.add("Triangle", () -> new SafeTuning(new Triangle(), true));
+                p.add("Circle", () -> new SafeTuning(new Circle(), true));
             });
             s.folder("Swerve", p-> {
-                p.add("Analog Min / Max Tuner", AnalogMinMaxTuner::new);
-                p.add("Swerve Offsets Test", SwerveOffsetsTest::new);
-                p.add("Swerve Turn Test", SwerveTurnTest::new);
+                p.add("Analog Min / Max Tuner", () -> new SafeTuning(new AnalogMinMaxTuner(), false));
+                p.add("Swerve Offsets Test", () -> new SafeTuning(new SwerveOffsetsTest(), true));
+                p.add("Swerve Turn Test", () -> new SafeTuning(new SwerveTurnTest(), true));
             });
         });
     }
@@ -122,10 +131,192 @@ public class Tuning extends SelectableOpMode {
         drawCurrent();
     }
 
-    /** This creates a full stop of the robot by setting the drive motors to run at 0 power. */
+    /** Cancel once per motion; repeatedly restarting TeleOp would grow Pedro's sample buffers. */
     public static void stopRobot() {
-        follower.startTeleopDrive(true);
-        follower.setTeleOpDrive(0,0,0,true);
+        if (motionStopped || follower == null) {
+            return;
+        }
+        motionStopped = true;
+        RuntimeException failure = null;
+        try {
+            follower.setTeleOpDrive(0, 0, 0, true);
+        } catch (RuntimeException e) {
+            failure = e;
+            RobotLog.ee("PedroTuning", e, "Failed to clear drive request");
+        }
+        try {
+            // Pedro 2.1.2 cancels motion and requests zero drivetrain output here.
+            follower.breakFollowing();
+        } catch (RuntimeException e) {
+            failure = e;
+            RobotLog.ee("PedroTuning", e, "Failed to cancel follower motion");
+            // Pedro's motor loop stops at the first exception. Bypass its power cache and
+            // independently attempt every motor once; the failure still latches the test off.
+            try {
+                if (follower.getDrivetrain() instanceof Mecanum) {
+                    for (DcMotorEx motor : ((Mecanum) follower.getDrivetrain()).getMotors()) {
+                        try {
+                            motor.setPower(0.0);
+                        } catch (RuntimeException motorFailure) {
+                            RobotLog.ee("PedroTuning", motorFailure, "Mecanum motor zero-power fallback failed");
+                        }
+                    }
+                }
+            } catch (RuntimeException fallbackFailure) {
+                RobotLog.ee("PedroTuning", fallbackFailure, "Could not access mecanum motors for shutdown");
+            }
+        }
+        if (failure != null) {
+            throw new IllegalStateException("Follower stop failed; inspect hardware and RobotLog", failure);
+        }
+    }
+
+    static void beginMotion() {
+        motionStopped = false;
+    }
+
+    static void updateFollower() {
+        // breakFollowing retains path references in 2.1.2: do not update after stopping.
+        if (!motionStopped) {
+            requireFeedback();
+            follower.update();
+            requireFeedback();
+        }
+    }
+
+    static void requireFeedback() {
+        if (follower == null || !TuningMath.validPose(follower.getPose())
+                || !TuningMath.validVelocity(follower.getVelocity())
+                || !TuningMath.isFinite(follower.getTotalHeading())) {
+            throw new IllegalStateException("Missing or nonfinite localization feedback");
+        }
+    }
+
+    static void requireTestDistance(double distance) {
+        if (!TuningMath.isFinite(distance) || distance == 0.0) {
+            throw new IllegalArgumentException("Test distance/radius must be finite and nonzero");
+        }
+    }
+
+    static void completeTest() {
+        stopRobot();
+        if (activeTest != null) {
+            activeTest.completed = true;
+        }
+    }
+
+    static void failTest(String reason) {
+        if (activeTest != null) {
+            activeTest.halt(reason);
+        } else {
+            stopRobot();
+            if (telemetryM != null) telemetryM.debug("Test failed: " + reason);
+        }
+    }
+}
+
+/** Shared watchdog for selector children, which do not receive SDK stop-request services. */
+class SafeTuning extends OpMode {
+    private final OpMode child;
+    private final boolean powered;
+    private long startedNanos;
+    private double timeoutSeconds;
+    private boolean started;
+    private boolean halted;
+    boolean completed;
+    private String failure;
+
+    SafeTuning(OpMode child, boolean powered) {
+        this.child = child;
+        this.powered = powered;
+    }
+
+    @Override public void init() {
+        Tuning.activeTest = this;
+        Tuning.beginMotion();
+        child.hardwareMap = hardwareMap;
+        child.gamepad1 = gamepad1;
+        child.gamepad2 = gamepad2;
+        child.telemetry = telemetry;
+        try {
+            child.init();
+        } catch (RuntimeException e) {
+            fail(e);
+        }
+    }
+
+    @Override public void init_loop() {
+        if (!halted) {
+            try { child.init_loop(); } catch (RuntimeException e) { fail(e); }
+        }
+        report();
+    }
+
+    @Override public void start() {
+        if (halted || started) return;
+        started = true;
+        timeoutSeconds = Tuning.POWERED_TIMEOUT_SECONDS;
+        startedNanos = System.nanoTime();
+        try {
+            if (powered && (!TuningMath.isFinite(timeoutSeconds) || timeoutSeconds <= 0.0)) {
+                throw new IllegalArgumentException("Powered timeout must be finite and positive");
+            }
+            if (gamepad1.b || gamepad2.b) { halt("Operator abort"); return; }
+            if (powered) Tuning.requireFeedback();
+            child.start();
+            if (powered && !completed) Tuning.requireFeedback();
+        } catch (RuntimeException e) {
+            fail(e);
+        }
+    }
+
+    @Override public void loop() {
+        if (!started || halted) { report(); return; }
+        try {
+            if (gamepad1.b || gamepad2.b) { halt("Operator abort"); report(); return; }
+            if (powered && !completed) {
+                if ((System.nanoTime() - startedNanos) / 1e9 >= timeoutSeconds) {
+                    halt("Powered test timed out; stop and reselect to retry"); report(); return;
+                }
+                Tuning.requireFeedback();
+            }
+            child.loop();
+            if (powered && !completed && !halted) Tuning.requireFeedback();
+        } catch (RuntimeException e) {
+            fail(e);
+        }
+        report();
+    }
+
+    void halt(String reason) {
+        if (!halted) {
+            halted = true;
+            failure = reason;
+            try {
+                Tuning.stopRobot();
+            } catch (RuntimeException e) {
+                failure += "; " + e.getMessage();
+                RobotLog.ee("PedroTuning", e, "Shutdown failed; test remains halted");
+            }
+        }
+    }
+
+    private void fail(RuntimeException e) {
+        RobotLog.ee("PedroTuning", e, "Tuning operation failed");
+        halt(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+    }
+
+    private void report() {
+        if (halted) {
+            telemetry.addData("Tuning stopped", failure);
+            telemetry.addData("Retry", "Stop and reselect the test; motion will not resume automatically");
+            telemetry.update();
+        }
+    }
+
+    @Override public void stop() {
+        halt("OpMode stopped");
+        // These existing children have no shutdown work; never dispatch another motion update.
     }
 }
 
@@ -160,14 +351,14 @@ class LocalizationTest extends OpMode {
         telemetryM.debug("Drivetrain debug string " + (((debugStringEnabled) ? "enabled" : "disabled")) +
                 " (press gamepad a to toggle)");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
         follower.startTeleopDrive();
-        follower.update();
+        Tuning.updateFollower();
     }
 
     /**
@@ -181,7 +372,7 @@ class LocalizationTest extends OpMode {
         }
 
         follower.setTeleOpDrive(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x, true);
-        follower.update();
+        Tuning.updateFollower();
 
         telemetryM.debug("x:" + follower.getPose().getX());
         telemetryM.debug("y:" + follower.getPose().getY());
@@ -212,11 +403,12 @@ class LocalizationTest extends OpMode {
  */
 class ForwardTuner extends OpMode {
     public static double DISTANCE = 48;
+    private Pose startingPose;
 
     @Override
     public void init() {
         follower.setStartingPose(new Pose(72,72));
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
@@ -228,17 +420,27 @@ class ForwardTuner extends OpMode {
         drawCurrent();
     }
 
+    @Override
+    public void start() {
+        Tuning.updateFollower();
+        startingPose = follower.getPose();
+    }
+
     /**
      * This updates the robot's pose estimate, and updates the Panels telemetry with the
      * calculated multiplier and draws the robot.
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
 
-        telemetryM.debug("Distance Moved: " + follower.getPose().getX());
+        double displacement = TuningMath.displacement(startingPose, follower.getPose(), false);
+        double multiplier = DISTANCE > 0 ? TuningMath.multiplier(DISTANCE, displacement,
+                follower.getPoseTracker().getLocalizer().getForwardMultiplier()) : Double.NaN;
+        telemetryM.debug("Forward Distance Moved: " + displacement);
         telemetryM.debug("The multiplier will display what your forward ticks to inches should be to scale your current distance to " + DISTANCE + " inches.");
-        telemetryM.debug("Multiplier: " + (DISTANCE / (follower.getPose().getX() / follower.getPoseTracker().getLocalizer().getForwardMultiplier())));
+        telemetryM.debug("Multiplier: " + (TuningMath.isFinite(multiplier) ? multiplier
+                : "Insufficient forward displacement or invalid measurement/configuration"));
         telemetryM.update(telemetry);
 
         drawCurrentAndHistory();
@@ -260,11 +462,12 @@ class ForwardTuner extends OpMode {
  */
 class LateralTuner extends OpMode {
     public static double DISTANCE = 48;
+    private Pose startingPose;
 
     @Override
     public void init() {
         follower.setStartingPose(new Pose(72,72));
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
@@ -276,17 +479,28 @@ class LateralTuner extends OpMode {
         drawCurrent();
     }
 
+    @Override
+    public void start() {
+        Tuning.updateFollower();
+        startingPose = follower.getPose();
+    }
+
     /**
      * This updates the robot's pose estimate, and updates the Panels telemetry with the
      * calculated multiplier and draws the robot.
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
 
-        telemetryM.debug("Distance Moved: " + follower.getPose().getY());
+        // Pedro's positive lateral axis points left; this manual test requests rightward travel.
+        double displacement = -TuningMath.displacement(startingPose, follower.getPose(), true);
+        double multiplier = DISTANCE > 0 ? TuningMath.multiplier(DISTANCE, displacement,
+                follower.getPoseTracker().getLocalizer().getLateralMultiplier()) : Double.NaN;
+        telemetryM.debug("Rightward Distance Moved: " + displacement);
         telemetryM.debug("The multiplier will display what your strafe ticks to inches should be to scale your current distance to " + DISTANCE + " inches.");
-        telemetryM.debug("Multiplier: " + (DISTANCE / (follower.getPose().getY() / follower.getPoseTracker().getLocalizer().getLateralMultiplier())));
+        telemetryM.debug("Multiplier: " + (TuningMath.isFinite(multiplier) ? multiplier
+                : "Insufficient rightward displacement or invalid measurement/configuration"));
         telemetryM.update(telemetry);
 
         drawCurrentAndHistory();
@@ -308,11 +522,12 @@ class LateralTuner extends OpMode {
  */
 class TurnTuner extends OpMode {
     public static double ANGLE = 2 * Math.PI;
+    private double startingHeading = Double.NaN;
 
     @Override
     public void init() {
         follower.setStartingPose(new Pose(72,72));
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
@@ -325,17 +540,27 @@ class TurnTuner extends OpMode {
         drawCurrent();
     }
 
+    @Override
+    public void start() {
+        Tuning.updateFollower();
+        startingHeading = follower.getTotalHeading();
+    }
+
     /**
      * This updates the robot's pose estimate, and updates the Panels telemetry with the
      * calculated multiplier and draws the robot.
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
 
-        telemetryM.debug("Total Angle: " + follower.getTotalHeading());
+        double displacement = follower.getTotalHeading() - startingHeading;
+        double multiplier = TuningMath.multiplier(ANGLE, displacement,
+                follower.getPoseTracker().getLocalizer().getTurningMultiplier());
+        telemetryM.debug("Angle Moved: " + displacement);
         telemetryM.debug("The multiplier will display what your turn ticks to inches should be to scale your current angle to " + ANGLE + " radians.");
-        telemetryM.debug("Multiplier: " + (ANGLE / (follower.getTotalHeading() / follower.getPoseTracker().getLocalizer().getTurningMultiplier())));
+        telemetryM.debug("Multiplier: " + (TuningMath.isFinite(multiplier) ? multiplier
+                : "Insufficient rotation in the requested direction or invalid measurement/configuration"));
         telemetryM.update(telemetry);
 
         drawCurrentAndHistory();
@@ -361,90 +586,71 @@ class ForwardVelocityTuner extends OpMode {
     private final ArrayList<Double> velocities = new ArrayList<>();
     public static double DISTANCE = 48;
     public static double RECORD_NUMBER = 10;
-
+    private int sampleCount;
+    private double distance;
+    private Pose startPose;
     private boolean end;
+    private double average = Double.NaN;
 
-    @Override
-    public void init() {
+    @Override public void init() {
         follower.setStartingPose(new Pose(72, 72));
     }
 
-    /** This initializes the drive motors as well as the cache of velocities and the Panels telemetry. */
-    @Override
-    public void init_loop() {
-        telemetryM.debug("The robot will run at 1 power until it reaches " + DISTANCE + " inches forward.");
-        telemetryM.debug("Make sure you have enough room, since the robot has inertia after cutting power.");
-        telemetryM.debug("After running the distance, the robot will cut power from the drivetrain and display the forward velocity.");
-        telemetryM.debug("Press B on game pad 1 to stop.");
-        telemetryM.debug("pose", follower.getPose());
+    @Override public void init_loop() {
+        telemetryM.debug("Forward velocity test: full power over " + DISTANCE + " inches; B aborts.");
+        telemetryM.debug("Powered runtime is bounded by Tuning.POWERED_TIMEOUT_SECONDS.");
         telemetryM.update(telemetry);
-
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
-    /** This starts the OpMode by setting the drive motors to run forward at full power. */
-    @Override
-    public void start() {
-        for (int i = 0; i < RECORD_NUMBER; i++) {
-            velocities.add(0.0);
+    @Override public void start() {
+        sampleCount = TuningMath.sampleCount(RECORD_NUMBER);
+        distance = DISTANCE;
+        if (!TuningMath.isFinite(distance) || distance <= 0.0) {
+            throw new IllegalArgumentException("Test distance must be finite and positive");
         }
-        follower.startTeleopDrive(true);
-        follower.update();
+        velocities.clear();
         end = false;
+        average = Double.NaN;
+        Pose pose = follower.getPose();
+        startPose = new Pose(pose.getX(), pose.getY(), pose.getHeading());
+        follower.startTeleopDrive(true);
     }
 
-    /**
-     * This runs the OpMode. At any point during the running of the OpMode, pressing B on
-     * game pad 1 will stop the OpMode. This continuously records the RECORD_NUMBER most recent
-     * velocities, and when the robot has run forward enough, these last velocities recorded are
-     * averaged and printed.
-     */
-    @Override
-    public void loop() {
-        if (gamepad1.bWasPressed()) {
-            stopRobot();
-            requestOpModeStop();
-        }
-
-        follower.update();
-        drawCurrentAndHistory();
-
-
+    @Override public void loop() {
+        if (gamepad1.b || gamepad2.b) { Tuning.failTest("Operator abort"); return; }
         if (!end) {
-            if (Math.abs(follower.getPose().getX()) > (DISTANCE + 72)) {
+            Tuning.updateFollower();
+            double moved = TuningMath.displacement(startPose, follower.getPose(), false);
+            if (!TuningMath.isFinite(moved) || moved < 0.0) {
+                throw new IllegalStateException("Invalid displacement or movement opposite commanded direction");
+            }
+            if (moved >= distance) {
                 end = true;
-                stopRobot();
+                Tuning.completeTest();
+                average = TuningMath.mean(velocities, sampleCount);
+                if (average <= 0.0) throw new IllegalStateException("No positive measured velocity");
             } else {
-                follower.setTeleOpDrive(1,0,0,true);
-                //double currentVelocity = Math.abs(follower.getVelocity().getXComponent());
-                double currentVelocity = Math.abs(follower.poseTracker.getLocalizer().getVelocity().getX());
-                velocities.add(currentVelocity);
-                velocities.remove(0);
+                double heading = startPose.getHeading();
+                double velocity = follower.getVelocity().dot(new Vector(1.0, heading));
+                if (!TuningMath.isFinite(velocity) || velocity < 0.0) {
+                    throw new IllegalStateException("Invalid velocity or velocity opposite commanded direction");
+                }
+                velocities.add(velocity);
+                if (velocities.size() > sampleCount) velocities.remove(0);
+                follower.setTeleOpDrive(1, 0, 0, true);
             }
-        } else {
-            stopRobot();
-            double average = 0;
-            for (double velocity : velocities) {
-                average += velocity;
-            }
-            average /= velocities.size();
+            drawCurrentAndHistory();
+        }
+        if (end) {
             telemetryM.debug("Forward Velocity: " + average);
-            telemetryM.debug("\n");
-            telemetryM.debug("Press A to set the Forward Velocity temporarily (while robot remains on).");
-
-            for (int i = 0; i < velocities.size(); i++) {
-                telemetry.addData(String.valueOf(i), velocities.get(i));
-            }
-
-            telemetryM.update(telemetry);
-            telemetry.update();
-
-            if (gamepad1.aWasPressed()) {
+            telemetryM.debug("Press A to apply this validated velocity temporarily; restart to rerun.");
+            if (gamepad1.aWasPressed() && TuningMath.isFinite(average) && average > 0.0) {
                 follower.setXVelocity(average);
-                String message = "XMovement: " + average;
-                changes.add(message);
+                changes.add("Forward Velocity: " + average);
             }
+            telemetryM.update(telemetry);
         }
     }
 }
@@ -466,87 +672,73 @@ class ForwardVelocityTuner extends OpMode {
  */
 class LateralVelocityTuner extends OpMode {
     private final ArrayList<Double> velocities = new ArrayList<>();
-
     public static double DISTANCE = 48;
     public static double RECORD_NUMBER = 10;
-
+    private int sampleCount;
+    private double distance;
+    private Pose startPose;
     private boolean end;
+    private double average = Double.NaN;
 
-    @Override
-    public void init() {
+    @Override public void init() {
         follower.setStartingPose(new Pose(72, 72));
     }
 
-    /**
-     * This initializes the drive motors as well as the cache of velocities and the Panels
-     * telemetryM.
-     */
-    @Override
-    public void init_loop() {
-        telemetryM.debug("The robot will run at 1 power until it reaches " + DISTANCE + " inches to the right.");
-        telemetryM.debug("Make sure you have enough room, since the robot has inertia after cutting power.");
-        telemetryM.debug("After running the distance, the robot will cut power from the drivetrain and display the strafe velocity.");
-        telemetryM.debug("Press B on Gamepad 1 to stop.");
+    @Override public void init_loop() {
+        telemetryM.debug("Lateral velocity test: full power over " + DISTANCE + " inches; B aborts.");
+        telemetryM.debug("Powered runtime is bounded by Tuning.POWERED_TIMEOUT_SECONDS.");
         telemetryM.update(telemetry);
-
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
-    /** This starts the OpMode by setting the drive motors to run right at full power. */
-    @Override
-    public void start() {
-        for (int i = 0; i < RECORD_NUMBER; i++) {
-            velocities.add(0.0);
+    @Override public void start() {
+        sampleCount = TuningMath.sampleCount(RECORD_NUMBER);
+        distance = DISTANCE;
+        if (!TuningMath.isFinite(distance) || distance <= 0.0) {
+            throw new IllegalArgumentException("Test distance must be finite and positive");
         }
+        velocities.clear();
+        end = false;
+        average = Double.NaN;
+        Pose pose = follower.getPose();
+        startPose = new Pose(pose.getX(), pose.getY(), pose.getHeading());
         follower.startTeleopDrive(true);
-        follower.update();
     }
 
-    /**
-     * This runs the OpMode. At any point during the running of the OpMode, pressing B on
-     * game pad1 will stop the OpMode. This continuously records the RECORD_NUMBER most recent
-     * velocities, and when the robot has run sideways enough, these last velocities recorded are
-     * averaged and printed.
-     */
-    @Override
-    public void loop() {
-        if (gamepad1.bWasPressed()) {
-            stopRobot();
-            requestOpModeStop();
-        }
-
-        follower.update();
-        drawCurrentAndHistory();
-
+    @Override public void loop() {
+        if (gamepad1.b || gamepad2.b) { Tuning.failTest("Operator abort"); return; }
         if (!end) {
-            if (Math.abs(follower.getPose().getY()) > (DISTANCE + 72)) {
+            Tuning.updateFollower();
+            double moved = TuningMath.displacement(startPose, follower.getPose(), true);
+            if (!TuningMath.isFinite(moved) || moved < 0.0) {
+                throw new IllegalStateException("Invalid displacement or movement opposite commanded direction");
+            }
+            if (moved >= distance) {
                 end = true;
-                stopRobot();
+                Tuning.completeTest();
+                average = TuningMath.mean(velocities, sampleCount);
+                if (average <= 0.0) throw new IllegalStateException("No positive measured velocity");
             } else {
-                follower.setTeleOpDrive(0,1,0,true);
-                double currentVelocity = Math.abs(follower.getVelocity().dot(new Vector(1, Math.PI / 2)));
-                velocities.add(currentVelocity);
-                velocities.remove(0);
+                double heading = startPose.getHeading() + Math.PI / 2;
+                double velocity = follower.getVelocity().dot(new Vector(1.0, heading));
+                if (!TuningMath.isFinite(velocity) || velocity < 0.0) {
+                    throw new IllegalStateException("Invalid velocity or velocity opposite commanded direction");
+                }
+                velocities.add(velocity);
+                if (velocities.size() > sampleCount) velocities.remove(0);
+                follower.setTeleOpDrive(0, 1, 0, true);
             }
-        } else {
-            stopRobot();
-            double average = 0;
-            for (double velocity : velocities) {
-                average += velocity;
-            }
-            average /= velocities.size();
-
-            telemetryM.debug("Strafe Velocity: " + average);
-            telemetryM.debug("\n");
-            telemetryM.debug("Press A to set the Lateral Velocity temporarily (while robot remains on).");
-            telemetryM.update(telemetry);
-
-            if (gamepad1.aWasPressed()) {
+            drawCurrentAndHistory();
+        }
+        if (end) {
+            telemetryM.debug("Lateral Velocity: " + average);
+            telemetryM.debug("Press A to apply this validated velocity temporarily; restart to rerun.");
+            if (gamepad1.aWasPressed() && TuningMath.isFinite(average) && average > 0.0) {
                 follower.setYVelocity(average);
-                String message = "YMovement: " + average;
-                changes.add(message);
+                changes.add("Lateral Velocity: " + average);
             }
+            telemetryM.update(telemetry);
         }
     }
 }
@@ -569,90 +761,86 @@ class LateralVelocityTuner extends OpMode {
 class ForwardZeroPowerAccelerationTuner extends OpMode {
     private final ArrayList<Double> accelerations = new ArrayList<>();
     public static double VELOCITY = 30;
-
+    private double targetVelocity;
+    private double stopVelocity;
+    private double heading;
     private double previousVelocity;
     private long previousTimeNano;
-
     private boolean stopping;
     private boolean end;
+    private double average = Double.NaN;
 
-    @Override
-    public void init() {
+    @Override public void init() {
         follower.setStartingPose(new Pose(72, 72));
     }
 
-    /** This initializes the drive motors as well as the Panels telemetryM. */
-    @Override
-    public void init_loop() {
-        telemetryM.debug("The robot will run forward until it reaches " + VELOCITY + " inches per second.");
-        telemetryM.debug("Then, it will cut power from the drivetrain and roll to a stop.");
-        telemetryM.debug("Make sure you have enough room.");
-        telemetryM.debug("After stopping, the forward zero power acceleration (natural deceleration) will be displayed.");
-        telemetryM.debug("Press B on Gamepad 1 to stop.");
+    @Override public void init_loop() {
+        telemetryM.debug("Forward deceleration test: accelerate to " + VELOCITY + " inches/s, then coast.");
+        telemetryM.debug("B aborts; Tuning.POWERED_TIMEOUT_SECONDS bounds acceleration and coasting.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
-    /** This starts the OpMode by setting the drive motors to run forward at full power. */
-    @Override
-    public void start() {
+    @Override public void start() {
+        targetVelocity = VELOCITY;
+        stopVelocity = follower.getConstraints().getVelocityConstraint();
+        if (!TuningMath.isFinite(targetVelocity) || targetVelocity <= 0.0
+                || !TuningMath.isFinite(stopVelocity) || stopVelocity <= 0.0 || stopVelocity >= targetVelocity) {
+            throw new IllegalArgumentException("Require finite 0 < stopping threshold < target velocity");
+        }
+        accelerations.clear();
+        stopping = end = false;
+        average = Double.NaN;
+        heading = follower.getPose().getHeading();
         follower.startTeleopDrive(false);
-        follower.update();
-        follower.setTeleOpDrive(1,0,0,true);
+        follower.setTeleOpDrive(1, 0, 0, true);
     }
 
-    /**
-     * This runs the OpMode. At any point during the running of the OpMode, pressing B on
-     * game pad 1 will stop the OpMode. When the robot hits the specified velocity, the robot will
-     * record its deceleration / negative acceleration until it stops. Then, it will average all the
-     * recorded deceleration / negative acceleration and print that value.
-     */
-    @Override
-    public void loop() {
-        if (gamepad1.bWasPressed()) {
-            stopRobot();
-            requestOpModeStop();
-        }
-
-        follower.update();
-        drawCurrentAndHistory();
-
-        Vector heading = new Vector(1.0, follower.getPose().getHeading());
+    @Override public void loop() {
+        if (gamepad1.b || gamepad2.b) { Tuning.failTest("Operator abort"); return; }
         if (!end) {
+            Tuning.updateFollower();
+            double velocity = follower.getVelocity().dot(new Vector(1.0, heading));
+            if (!TuningMath.isFinite(velocity) || velocity < 0.0) {
+                throw new IllegalStateException("Invalid velocity or motion opposite commanded direction");
+            }
+            long now = System.nanoTime();
             if (!stopping) {
-                if (follower.getVelocity().dot(heading) > VELOCITY) {
-                    previousVelocity = follower.getVelocity().dot(heading);
-                    previousTimeNano = System.nanoTime();
+                if (velocity >= targetVelocity) {
+                    previousVelocity = velocity;
+                    previousTimeNano = now;
                     stopping = true;
-                    follower.setTeleOpDrive(0,0,0,true);
+                    // Remain in the existing FLOAT TeleOp mode while measuring natural deceleration.
+                    follower.setTeleOpDrive(0, 0, 0, true);
+                    Tuning.updateFollower();
                 }
             } else {
-                double currentVelocity = follower.getVelocity().dot(heading);
-                accelerations.add((currentVelocity - previousVelocity) / ((System.nanoTime() - previousTimeNano) / Math.pow(10.0, 9)));
-                previousVelocity = currentVelocity;
-                previousTimeNano = System.nanoTime();
-                if (currentVelocity < follower.getConstraints().getVelocityConstraint()) {
+                double dt = (now - previousTimeNano) / 1e9;
+                double acceleration = (velocity - previousVelocity) / dt;
+                if (dt <= 0.0 || !TuningMath.isFinite(acceleration)) {
+                    throw new IllegalStateException("Invalid deceleration sample interval/value");
+                }
+                accelerations.add(acceleration);
+                previousVelocity = velocity;
+                previousTimeNano = now;
+                if (velocity <= stopVelocity) {
                     end = true;
+                    Tuning.completeTest();
+                    average = TuningMath.mean(accelerations, 2);
+                    if (average >= 0.0) throw new IllegalStateException("Samples do not show deceleration");
                 }
             }
-        } else {
-            double average = 0;
-            for (double acceleration : accelerations) {
-                average += acceleration;
-            }
-            average /= accelerations.size();
-
-            telemetryM.debug("Forward Zero Power Acceleration (Deceleration): " + average);
-            telemetryM.debug("\n");
-            telemetryM.debug("Press A to set the Forward Zero Power Acceleration temporarily (while robot remains on).");
-            telemetryM.update(telemetry);
-
-            if (gamepad1.aWasPressed()) {
+            drawCurrentAndHistory();
+        }
+        if (end) {
+            telemetryM.debug("Forward Zero Power Acceleration: " + average);
+            telemetryM.debug("Press A to apply this validated deceleration temporarily; restart to rerun.");
+            if (gamepad1.aWasPressed() && TuningMath.isFinite(average) && average < 0.0) {
                 follower.getConstants().setForwardZeroPowerAcceleration(average);
-                String message = "Forward Zero Power Acceleration: " + average;
-                changes.add(message);
+                changes.add("Forward Zero Power Acceleration: " + average);
             }
+            telemetryM.update(telemetry);
         }
     }
 }
@@ -675,88 +863,86 @@ class ForwardZeroPowerAccelerationTuner extends OpMode {
 class LateralZeroPowerAccelerationTuner extends OpMode {
     private final ArrayList<Double> accelerations = new ArrayList<>();
     public static double VELOCITY = 30;
+    private double targetVelocity;
+    private double stopVelocity;
+    private double heading;
     private double previousVelocity;
     private long previousTimeNano;
     private boolean stopping;
     private boolean end;
+    private double average = Double.NaN;
 
-    @Override
-    public void init() {
+    @Override public void init() {
         follower.setStartingPose(new Pose(72, 72));
     }
 
-    /** This initializes the drive motors as well as the Panels telemetry. */
-    @Override
-    public void init_loop() {
-        telemetryM.debug("The robot will run to the right until it reaches " + VELOCITY + " inches per second.");
-        telemetryM.debug("Then, it will cut power from the drivetrain and roll to a stop.");
-        telemetryM.debug("Make sure you have enough room.");
-        telemetryM.debug("After stopping, the lateral zero power acceleration (natural deceleration) will be displayed.");
-        telemetryM.debug("Press B on game pad 1 to stop.");
+    @Override public void init_loop() {
+        telemetryM.debug("Lateral deceleration test: accelerate to " + VELOCITY + " inches/s, then coast.");
+        telemetryM.debug("B aborts; Tuning.POWERED_TIMEOUT_SECONDS bounds acceleration and coasting.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
-    /** This starts the OpMode by setting the drive motors to run forward at full power. */
-    @Override
-    public void start() {
+    @Override public void start() {
+        targetVelocity = VELOCITY;
+        stopVelocity = follower.getConstraints().getVelocityConstraint();
+        if (!TuningMath.isFinite(targetVelocity) || targetVelocity <= 0.0
+                || !TuningMath.isFinite(stopVelocity) || stopVelocity <= 0.0 || stopVelocity >= targetVelocity) {
+            throw new IllegalArgumentException("Require finite 0 < stopping threshold < target velocity");
+        }
+        accelerations.clear();
+        stopping = end = false;
+        average = Double.NaN;
+        heading = follower.getPose().getHeading() + Math.PI / 2;
         follower.startTeleopDrive(false);
-        follower.update();
-        follower.setTeleOpDrive(0,1,0,true);
+        follower.setTeleOpDrive(0, 1, 0, true);
     }
 
-    /**
-     * This runs the OpMode. At any point during the running of the OpMode, pressing B on
-     * game pad 1 will stop the OpMode. When the robot hits the specified velocity, the robot will
-     * record its deceleration / negative acceleration until it stops. Then, it will average all the
-     * recorded deceleration / negative acceleration and print that value.
-     */
-    @Override
-    public void loop() {
-        if (gamepad1.bWasPressed()) {
-            stopRobot();
-            requestOpModeStop();
-        }
-
-        follower.update();
-        drawCurrentAndHistory();
-
-        Vector heading = new Vector(1.0, follower.getPose().getHeading() - Math.PI / 2);
+    @Override public void loop() {
+        if (gamepad1.b || gamepad2.b) { Tuning.failTest("Operator abort"); return; }
         if (!end) {
+            Tuning.updateFollower();
+            double velocity = follower.getVelocity().dot(new Vector(1.0, heading));
+            if (!TuningMath.isFinite(velocity) || velocity < 0.0) {
+                throw new IllegalStateException("Invalid velocity or motion opposite commanded direction");
+            }
+            long now = System.nanoTime();
             if (!stopping) {
-                if (Math.abs(follower.getVelocity().dot(heading)) > VELOCITY) {
-                    previousVelocity = Math.abs(follower.getVelocity().dot(heading));
-                    previousTimeNano = System.nanoTime();
+                if (velocity >= targetVelocity) {
+                    previousVelocity = velocity;
+                    previousTimeNano = now;
                     stopping = true;
-                    follower.setTeleOpDrive(0,0,0,true);
+                    // Remain in the existing FLOAT TeleOp mode while measuring natural deceleration.
+                    follower.setTeleOpDrive(0, 0, 0, true);
+                    Tuning.updateFollower();
                 }
             } else {
-                double currentVelocity = Math.abs(follower.getVelocity().dot(heading));
-                accelerations.add((currentVelocity - previousVelocity) / ((System.nanoTime() - previousTimeNano) / Math.pow(10.0, 9)));
-                previousVelocity = currentVelocity;
-                previousTimeNano = System.nanoTime();
-                if (currentVelocity < follower.getConstraints().getVelocityConstraint()) {
+                double dt = (now - previousTimeNano) / 1e9;
+                double acceleration = (velocity - previousVelocity) / dt;
+                if (dt <= 0.0 || !TuningMath.isFinite(acceleration)) {
+                    throw new IllegalStateException("Invalid deceleration sample interval/value");
+                }
+                accelerations.add(acceleration);
+                previousVelocity = velocity;
+                previousTimeNano = now;
+                if (velocity <= stopVelocity) {
                     end = true;
+                    Tuning.completeTest();
+                    average = TuningMath.mean(accelerations, 2);
+                    if (average >= 0.0) throw new IllegalStateException("Samples do not show deceleration");
                 }
             }
-        } else {
-            double average = 0;
-            for (double acceleration : accelerations) {
-                average += acceleration;
-            }
-            average /= accelerations.size();
-
-            telemetryM.debug("Lateral Zero Power Acceleration (Deceleration): " + average);
-            telemetryM.debug("\n");
-            telemetryM.debug("Press A to set the Lateral Zero Power Acceleration temporarily (while robot remains on).");
-            telemetryM.update(telemetry);
-
-            if (gamepad1.aWasPressed()) {
+            drawCurrentAndHistory();
+        }
+        if (end) {
+            telemetryM.debug("Lateral Zero Power Acceleration: " + average);
+            telemetryM.debug("Press A to apply this validated deceleration temporarily; restart to rerun.");
+            if (gamepad1.aWasPressed() && TuningMath.isFinite(average) && average < 0.0) {
                 follower.getConstants().setLateralZeroPowerAcceleration(average);
-                String message = "Lateral Zero Power Acceleration: " + average;
-                changes.add(message);
+                changes.add("Lateral Zero Power Acceleration: " + average);
             }
+            telemetryM.update(telemetry);
         }
     }
 }
@@ -777,165 +963,111 @@ class PredictiveBrakingTuner extends OpMode {
     private static final double[] TEST_POWERS =
             {1, 1, 1, 0.9, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2};
     private static final double BRAKING_POWER = -0.2;
-
     private static final int DRIVE_TIME_MS = 1000;
+    // A watchdog budget, not a measured braking time or a robot calibration.
+    public static double BRAKE_TIMEOUT_SECONDS = 3.0;
 
-    private enum State {
-        START_MOVE,
-        WAIT_DRIVE_TIME,
-        APPLY_BRAKE,
-        WAIT_BRAKE_TIME,
-        RECORD,
-        DONE
-    }
-
-    private static class BrakeRecord {
-        double timeMs;
-        Pose pose;
-        double velocity;
-
-        BrakeRecord(double timeMs, Pose pose, double velocity) {
-            this.timeMs = timeMs;
-            this.pose = pose;
-            this.velocity = velocity;
-        }
-    }
-
+    private enum State { START_MOVE, WAIT_DRIVE_TIME, WAIT_BRAKE_TIME, DONE }
     private State state = State.START_MOVE;
-
     private final ElapsedTime timer = new ElapsedTime();
-
-    private int iteration = 0;
-
-    private Vector startPosition;
+    private int iteration;
+    private Pose brakingStart;
+    private double heading;
     private double measuredVelocity;
-
+    private double brakeTimeout;
+    private double[] coefficients;
     private final List<double[]> velocityToBrakingDistance = new ArrayList<>();
-    private final List<BrakeRecord> brakeData = new ArrayList<>();
 
-    @Override
-    public void init() {}
+    @Override public void init() {}
 
-    @Override
-    public void init_loop() {
-        telemetryM.debug("The robot will move forwards and backwards starting at max speed and slowing down.");
-        telemetryM.debug("Make sure you have enough room. Leave at least 4-5 feet.");
-        telemetryM.debug("After stopping, kFriction and kBraking will be displayed.");
-        telemetryM.debug("Make sure to turn the timer off.");
-        telemetryM.debug("Press B on game pad 1 to stop.");
+    @Override public void init_loop() {
+        telemetryM.debug("Predictive braking test: alternating forward/backward motion at existing test powers.");
+        telemetryM.debug("B aborts. Both total runtime and each reverse-braking phase have watchdogs.");
+        telemetryM.debug("Leave sufficient clear space. No coefficients are applied automatically.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
-    @Override
-    public void start() {
+    @Override public void start() {
+        brakeTimeout = BRAKE_TIMEOUT_SECONDS;
+        if (!TuningMath.isFinite(brakeTimeout) || brakeTimeout <= 0.0) {
+            throw new IllegalArgumentException("Braking timeout must be finite and positive");
+        }
+        iteration = 0;
+        coefficients = null;
+        velocityToBrakingDistance.clear();
+        state = State.START_MOVE;
         timer.reset();
-        follower.update();
-        follower.startTeleOpDrive(true);
     }
 
-    @SuppressLint("DefaultLocale")
-    @Override
-    public void loop() {
-        follower.update();
-
-        if (gamepad1.b) {
-            stopRobot();
-            requestOpModeStop();
+    @Override public void loop() {
+        if (gamepad1.b || gamepad2.b) { Tuning.failTest("Operator abort"); return; }
+        if (state == State.DONE) {
+            // No follower updates, fit recalculation, or repeated stopping after completion.
+            telemetryM.debug("Tuning Complete; restart the test to run again.");
+            telemetryM.debug("kLinearBraking", coefficients[0]);
+            telemetryM.debug("kQuadraticFriction", coefficients[1]);
+            telemetryM.update(telemetry);
             return;
         }
-
-        double direction = (iteration % 2 == 0) ? 1 : -1;
-
+        Tuning.updateFollower();
+        double direction = iteration % 2 == 0 ? 1.0 : -1.0;
         switch (state) {
-            case START_MOVE: {
-                if (iteration >= TEST_POWERS.length) {
-                    state = State.DONE;
-                    break;
-                }
-
-                double currentPower = TEST_POWERS[iteration];
-                follower.setMaxPower(currentPower);
+            case START_MOVE:
+                heading = follower.getPose().getHeading();
+                Tuning.beginMotion();
+                follower.startTeleopDrive(true);
+                follower.setMaxPower(TEST_POWERS[iteration]);
                 follower.setTeleOpDrive(direction, 0, 0, true);
-
                 timer.reset();
                 state = State.WAIT_DRIVE_TIME;
                 break;
-            }
-
-            case WAIT_DRIVE_TIME: {
+            case WAIT_DRIVE_TIME:
                 if (timer.milliseconds() >= DRIVE_TIME_MS) {
-                    measuredVelocity = follower.getVelocity().getMagnitude();
-                    startPosition = follower.getPose().getAsVector();
-                    state = State.APPLY_BRAKE;
+                    measuredVelocity = direction * follower.getVelocity().dot(new Vector(1.0, heading));
+                    if (!TuningMath.isFinite(measuredVelocity) || measuredVelocity <= 0.0) {
+                        throw new IllegalStateException("No valid forward velocity for braking sample");
+                    }
+                    Pose pose = follower.getPose();
+                    brakingStart = new Pose(pose.getX(), pose.getY(), pose.getHeading());
+                    follower.setTeleOpDrive(BRAKING_POWER * direction, 0, 0, true);
+                    timer.reset();
+                    state = State.WAIT_BRAKE_TIME;
                 }
                 break;
-            }
-
-            case APPLY_BRAKE: {
-                follower.setTeleOpDrive(BRAKING_POWER * direction, 0, 0, true);
-
-                timer.reset();
-                state = State.WAIT_BRAKE_TIME;
-                break;
-            }
-
-            case WAIT_BRAKE_TIME: {
-                double t = timer.milliseconds();
-                Pose currentPose = follower.getPose();
-                double currentVelocity = follower.getVelocity().getMagnitude();
-
-                brakeData.add(new BrakeRecord(t, currentPose, currentVelocity));
-
-                if (follower.getVelocity().dot(new Vector(direction,
-                        follower.getHeading())) <= 0) {
-                    state = State.RECORD;
+            case WAIT_BRAKE_TIME:
+                if (timer.seconds() >= brakeTimeout) {
+                    Tuning.failTest("Reverse-braking phase timed out");
+                    return;
+                }
+                double velocity = direction * follower.getVelocity().dot(new Vector(1.0, heading));
+                if (!TuningMath.isFinite(velocity)) {
+                    throw new IllegalStateException("Nonfinite braking velocity");
+                }
+                if (velocity <= 0.0) {
+                    // Stop reverse torque immediately at the first observed zero crossing.
+                    stopRobot();
+                    Pose pose = follower.getPose();
+                    double dx = pose.getX() - brakingStart.getX();
+                    double dy = pose.getY() - brakingStart.getY();
+                    double distance = direction * (dx * Math.cos(heading) + dy * Math.sin(heading));
+                    if (!TuningMath.isFinite(distance) || distance <= 0.0) {
+                        throw new IllegalStateException("Invalid or zero braking distance");
+                    }
+                    velocityToBrakingDistance.add(new double[]{measuredVelocity, distance});
+                    iteration++;
+                    if (iteration == TEST_POWERS.length) {
+                        coefficients = TuningMath.brakingFit(velocityToBrakingDistance);
+                        state = State.DONE;
+                        Tuning.completeTest();
+                    } else {
+                        state = State.START_MOVE;
+                    }
                 }
                 break;
-            }
-
-            case RECORD: {
-                Vector endPosition = follower.getPose().getAsVector();
-                double brakingDistance = endPosition.minus(startPosition).getMagnitude();
-
-                velocityToBrakingDistance.add(new double[]{measuredVelocity, brakingDistance});
-
-                telemetryM.debug("Test " + iteration,
-                        String.format("v=%.3f  d=%.3f", measuredVelocity,
-                                brakingDistance));
-                telemetryM.update(telemetry);
-
-                iteration++;
-                state = State.START_MOVE;
-
-                break;
-            }
-
-            case DONE: {
-                stopRobot();
-
-                double[] coefficients = quadraticFit(velocityToBrakingDistance);
-
-                telemetryM.debug("Tuning Complete");
-                telemetryM.debug("Braking Profile:");
-                telemetryM.debug("kQuadratic", coefficients[1]);
-                telemetryM.debug("kLinear", coefficients[0]);
-                telemetryM.update(telemetry);
-                telemetryM.debug("Tuning Complete");
-                telemetryM.debug("Braking Profile:");
-                telemetryM.debug("kQuadraticFriction", coefficients[1]);
-                telemetryM.debug("kLinearBraking", coefficients[0]);
-                for (BrakeRecord record : brakeData) {
-                    Pose p = record.pose;
-                    telemetryM.debug(String.format("t=%.0f ms, x=%.2f, y=%.2f, θ=%.2f, v=%.2f",
-                            record.timeMs, p.getX(), p.getY(),
-                            p.getHeading(),
-                            record.velocity));
-                }
-                telemetryM.update();
-                break;
-            }
+            default:
+                throw new IllegalStateException("Unexpected braking test state");
         }
     }
 }
@@ -969,12 +1101,13 @@ class TranslationalTuner extends OpMode {
         telemetryM.debug("The robot will try to stay in place while you push it laterally.");
         telemetryM.debug("You can adjust the PIDF values to tune the robot's translational PIDF(s).");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
+        Tuning.requireTestDistance(DISTANCE);
         follower.deactivateAllPIDFs();
         follower.activateTranslational();
         forwards = new Path(new BezierLine(new Pose(72,72), new Pose(DISTANCE + 72,72)));
@@ -987,7 +1120,7 @@ class TranslationalTuner extends OpMode {
     /** This runs the OpMode, updating the Follower as well as printing out the debug statements to the Telemetry */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
 
         if (!follower.isBusy()) {
@@ -1041,12 +1174,13 @@ class HeadingTuner extends OpMode {
         telemetryM.debug("The robot will try to stay at a constant heading while you try to turn it.");
         telemetryM.debug("You can adjust the PIDF values to tune the robot's heading PIDF(s).");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
+        Tuning.requireTestDistance(DISTANCE);
         follower.deactivateAllPIDFs();
         follower.activateHeading();
         forwards = new Path(new BezierLine(new Pose(72,72), new Pose(DISTANCE + 72,72)));
@@ -1062,7 +1196,7 @@ class HeadingTuner extends OpMode {
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
 
         if (!follower.isBusy()) {
@@ -1113,12 +1247,13 @@ class DriveTuner extends OpMode {
         telemetryM.debug("The robot will go forward and backward continuously along the path.");
         telemetryM.debug("Make sure you have enough room.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
+        Tuning.requireTestDistance(DISTANCE);
         follower.deactivateAllPIDFs();
         follower.activateDrive();
 
@@ -1143,7 +1278,7 @@ class DriveTuner extends OpMode {
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
 
         if (!follower.isBusy()) {
@@ -1192,12 +1327,13 @@ class Line extends OpMode {
         telemetryM.debug("The robot will go forward and backward continuously along the path while correcting.");
         telemetryM.debug("You can adjust the PIDF values to tune the robot's drive PIDF(s).");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
+        Tuning.requireTestDistance(DISTANCE);
         follower.activateAllPIDFs();
         forwards = new Path(new BezierLine(new Pose(72,72), new Pose(DISTANCE + 72,72)));
         forwards.setConstantHeadingInterpolation(0);
@@ -1209,7 +1345,7 @@ class Line extends OpMode {
     /** This runs the OpMode, updating the Follower as well as printing out the debug statements to the Telemetry */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
 
         if (!follower.isBusy()) {
@@ -1262,12 +1398,13 @@ class CentripetalTuner extends OpMode {
         telemetryM.debug("The robot will go continuously along the path.");
         telemetryM.debug("Make sure you have enough room.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
+        Tuning.requireTestDistance(DISTANCE);
         follower.activateAllPIDFs();
         forwards = new Path(new BezierCurve(new Pose(72,72), new Pose(Math.abs(DISTANCE) + 72,72), new Pose(Math.abs(DISTANCE) + 72,DISTANCE + 72)));
         backwards = new Path(new BezierCurve(new Pose(Math.abs(DISTANCE) + 72,DISTANCE + 72), new Pose(Math.abs(DISTANCE) + 72,72), new Pose(72,72)));
@@ -1284,7 +1421,7 @@ class CentripetalTuner extends OpMode {
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
         if (!follower.isBusy()) {
             if (forward) {
@@ -1323,7 +1460,7 @@ class Triangle extends OpMode {
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
 
         if (follower.atParametricEnd()) {
@@ -1341,7 +1478,7 @@ class Triangle extends OpMode {
         telemetryM.debug("This will run in a roughly triangular shape, starting on the bottom-middle point.");
         telemetryM.debug("So, make sure you have enough space to the left, front, and right to run the OpMode.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
@@ -1379,6 +1516,7 @@ class Circle extends OpMode {
     private PathChain circle;
 
     public void start() {
+        Tuning.requireTestDistance(RADIUS);
         circle = follower.pathBuilder()
                 .addPath(new BezierCurve(new Pose(72, 72), new Pose(RADIUS + 72, 72), new Pose(RADIUS + 72, RADIUS + 72)))
                 .setHeadingInterpolation(HeadingInterpolator.facingPoint(72, RADIUS + 72))
@@ -1398,7 +1536,7 @@ class Circle extends OpMode {
         telemetryM.debug("So, make sure you have enough space to the left, front, and back to run the OpMode.");
         telemetryM.debug("It will also continuously face the center of the circle to test your heading and centripetal correction.");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
@@ -1413,7 +1551,7 @@ class Circle extends OpMode {
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
         drawCurrentAndHistory();
 
         if (follower.atParametricEnd()) {
@@ -1509,14 +1647,14 @@ class SwerveOffsetsTest extends OpMode {
         telemetryM.debug("Drivetrain debug string " + (((debugStringEnabled) ? "enabled" : "disabled")) +
                 " (press gamepad a to toggle)");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
         follower.startTeleopDrive();
-        follower.update();
+        Tuning.updateFollower();
     }
 
     /**
@@ -1530,7 +1668,7 @@ class SwerveOffsetsTest extends OpMode {
         }
 
         follower.setTeleOpDrive(0.25, 0, 0, true);
-        follower.update();
+        Tuning.updateFollower();
 
         if (debugStringEnabled) {
             telemetryM.debug("Drivetrain Debug String:\n" +
@@ -1567,14 +1705,14 @@ class SwerveTurnTest extends OpMode {
         telemetryM.debug("Drivetrain debug string " + (((debugStringEnabled) ? "enabled" : "disabled")) +
                 " (press gamepad a to toggle)");
         telemetryM.update(telemetry);
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
     @Override
     public void start() {
         follower.startTeleopDrive();
-        follower.update();
+        Tuning.updateFollower();
     }
 
     /**
@@ -1588,7 +1726,7 @@ class SwerveTurnTest extends OpMode {
         }
 
         follower.setTeleOpDrive(0, 0, 0.25, true);
-        follower.update();
+        Tuning.updateFollower();
 
         if (debugStringEnabled) {
             telemetryM.debug("Drivetrain Debug String:\n" +
@@ -1612,7 +1750,7 @@ class OffsetsTuner extends OpMode {
     @Override
     public void init() {
         follower.setStartingPose(new Pose(72,72));
-        follower.update();
+        Tuning.updateFollower();
         drawCurrent();
     }
 
@@ -1632,7 +1770,7 @@ class OffsetsTuner extends OpMode {
      */
     @Override
     public void loop() {
-        follower.update();
+        Tuning.updateFollower();
 
         telemetryM.debug("Total Angle: " + follower.getTotalHeading());
 
@@ -1730,19 +1868,21 @@ class Drawing {
      * @param style the parameters used to draw the Path with
      */
     public static void drawPath(Path path, Style style) {
+        if (path == null) return;
         double[][] points = path.getPanelsDrawingPoints();
-
-        for (int i = 0; i < points[0].length; i++) {
-            for (int j = 0; j < points.length; j++) {
-                if (Double.isNaN(points[j][i])) {
-                    points[j][i] = 0;
-                }
+        if (points == null || points.length != 2 || points[0] == null || points[1] == null
+                || points[0].length != points[1].length) return;
+        panelsField.setStyle(style);
+        // Pedro 2.1.2 stores [x coordinates][y coordinates], not an array of (x,y) pairs.
+        for (int i = 1; i < points[0].length; i++) {
+            double x0 = points[0][i - 1], y0 = points[1][i - 1];
+            double x1 = points[0][i], y1 = points[1][i];
+            if (TuningMath.isFinite(x0) && TuningMath.isFinite(y0)
+                    && TuningMath.isFinite(x1) && TuningMath.isFinite(y1)) {
+                panelsField.moveCursor(x0, y0);
+                panelsField.line(x1, y1);
             }
         }
-
-        panelsField.setStyle(style);
-        panelsField.moveCursor(points[0][0], points[0][1]);
-        panelsField.line(points[1][0], points[1][1]);
     }
 
     /**
@@ -1789,5 +1929,115 @@ class Drawing {
      */
     public static void sendPacket() {
         panelsField.update();
+    }
+}
+
+/** Pure numerical validation shared by the tuners; these methods never command hardware. */
+final class TuningMath {
+    // Numerical resolution, not a robot calibration or a physical motion tolerance.
+    private static final double EPSILON = 1e-9;
+
+    private TuningMath() {}
+
+    static boolean isFinite(double value) {
+        return !Double.isNaN(value) && !Double.isInfinite(value);
+    }
+
+    static boolean validPose(Pose pose) {
+        return pose != null && isFinite(pose.getX()) && isFinite(pose.getY())
+                && isFinite(pose.getHeading());
+    }
+
+    static boolean validVelocity(Vector velocity) {
+        return velocity != null && isFinite(velocity.getXComponent())
+                && isFinite(velocity.getYComponent()) && isFinite(velocity.getMagnitude());
+    }
+
+    /** Signed displacement along the initial robot's forward or left (+lateral) axis. */
+    static double displacement(Pose start, Pose current, boolean lateral) {
+        if (!validPose(start) || !validPose(current)) return Double.NaN;
+        double dx = current.getX() - start.getX();
+        double dy = current.getY() - start.getY();
+        double heading = start.getHeading();
+        double distance = lateral ? -dx * Math.sin(heading) + dy * Math.cos(heading)
+                : dx * Math.cos(heading) + dy * Math.sin(heading);
+        return isFinite(distance) ? distance : Double.NaN;
+    }
+
+    /** Returns NaN unless the observed motion agrees with the requested signed motion. */
+    static double multiplier(double target, double measured, double currentMultiplier) {
+        if (!isFinite(target) || !isFinite(measured) || !isFinite(currentMultiplier)
+                || Math.abs(target) <= EPSILON || Math.abs(measured) <= EPSILON
+                || currentMultiplier <= 0 || Math.signum(target) != Math.signum(measured)) {
+            return Double.NaN;
+        }
+        double result = (target / measured) * currentMultiplier;
+        return isFinite(result) && result > 0 ? result : Double.NaN;
+    }
+
+    /** Dashboard sample counts must be positive integers, never silently rounded. */
+    static int sampleCount(double requested) {
+        if (!isFinite(requested) || requested <= 0 || requested > Integer.MAX_VALUE
+                || requested != Math.rint(requested)) {
+            throw new IllegalArgumentException("Sample count must be a finite positive integer");
+        }
+        return (int) requested;
+    }
+
+    /** Mean of actual finite measurements; callers must also validate the physical sign. */
+    static double mean(List<Double> samples, int minimumSamples) {
+        if (minimumSamples <= 0 || samples == null || samples.size() < minimumSamples) {
+            throw new IllegalArgumentException("Insufficient measurement samples");
+        }
+        double result = 0;
+        for (Double sample : samples) {
+            if (sample == null || !isFinite(sample)) {
+                throw new IllegalArgumentException("Measurement sample is not finite");
+            }
+            result += sample / samples.size();
+        }
+        if (!isFinite(result)) throw new IllegalArgumentException("Measurement average is not finite");
+        return result;
+    }
+
+    /** Validates a physical distance = linear*v + quadratic*v^2 fit; returns {linear, quadratic}. */
+    static double[] brakingFit(List<double[]> samples) {
+        if (samples == null || samples.size() < 2) {
+            throw new IllegalArgumentException("Braking fit needs at least two distinct speeds");
+        }
+        double sum2 = 0, sum3 = 0, sum4 = 0, sumXY = 0, sumX2Y = 0;
+        for (double[] sample : samples) {
+            if (sample == null || sample.length < 2 || !isFinite(sample[0])
+                    || !isFinite(sample[1]) || sample[0] <= 0 || sample[1] <= 0) {
+                throw new IllegalArgumentException("Braking samples need finite positive speed and distance");
+            }
+            double x = sample[0], y = sample[1], x2 = x * x;
+            sum2 += x2;
+            sum3 += x2 * x;
+            sum4 += x2 * x2;
+            sumXY += x * y;
+            sumX2Y += x2 * y;
+        }
+        double diagonalProduct = sum2 * sum4;
+        double offDiagonalProduct = sum3 * sum3;
+        double determinant = diagonalProduct - offDiagonalProduct;
+        if (!isFinite(sumXY) || !isFinite(sumX2Y) || !isFinite(diagonalProduct)
+                || !isFinite(offDiagonalProduct) || !isFinite(determinant)
+                || determinant <= EPSILON * Math.max(diagonalProduct, offDiagonalProduct)
+                || determinant < 1e-10) {
+            throw new IllegalArgumentException("Braking samples produce a singular or unstable fit");
+        }
+        final double[] coefficients;
+        try {
+            coefficients = com.pedropathing.math.MathFunctions.quadraticFit(samples);
+        } catch (RuntimeException failure) {
+            throw new IllegalArgumentException("Braking fit could not be calculated", failure);
+        }
+        if (coefficients == null || coefficients.length != 2 || !isFinite(coefficients[0])
+                || !isFinite(coefficients[1]) || coefficients[0] < 0 || coefficients[1] < 0
+                || (coefficients[0] == 0 && coefficients[1] == 0)) {
+            throw new IllegalArgumentException("Braking fit produced invalid physical coefficients");
+        }
+        return coefficients;
     }
 }

@@ -5,6 +5,7 @@ import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.robot.ShootingCoordinator;
 import org.firstinspires.ftc.teamcode.sensors.BallColorSensor;
@@ -22,14 +23,14 @@ public class Teleop extends OpMode {
     private static final double PRECISION_SPEED_SCALE = 0.20;
     // Per-axis threshold in [0.0, 1.0); inputs outside it retain their original magnitude.
     private static final double JOYSTICK_DEADZONE = 0.05;
-    private static final double INTAKE_POWER = 0.35;
+    private static final double INTAKE_POWER = 0.80;
     private static final double TRANSFER_POWER = 0.35;
     // Reverse activates while the corresponding trigger exceeds this threshold.
     private static final float TRIGGER_THRESHOLD = 0.20f;
 
     // Encoder ticks/second. Leave zero until hardware-appropriate limits are explicitly set.
-    private static final double MANUAL_FLYWHEEL_MAX_VELOCITY = 0.0;
-    private static final double MANUAL_FLYWHEEL_INCREMENT = 0.0;
+    private static final double MANUAL_FLYWHEEL_MAX_VELOCITY = Double.MAX_VALUE;
+    private static final double MANUAL_FLYWHEEL_INCREMENT = 50.0;
     // Uncalibrated readiness settings: zero tolerance requires an exact velocity match.
     private static final double FLYWHEEL_VELOCITY_TOLERANCE = 0.0;
     private static final double FLYWHEEL_STABLE_TIME_SECONDS = 0.25;
@@ -175,19 +176,36 @@ public class Teleop extends OpMode {
 
     @Override
     public void stop() {
-        if (driveTrain != null) {
-            driveTrain.stop();
-        }
-        if (intake != null) {
-            intake.stop();
-        }
-        if (transfer != null) {
-            transfer.stop();
-        }
-        if (shooter != null) {
-            shooter.stop();
-        }
         flywheelsEnabled = false;
+        // A failed hardware command must not prevent shutdown of the remaining mechanisms.
+        try {
+            if (driveTrain != null) {
+                driveTrain.stop();
+            }
+        } catch (RuntimeException e) {
+            RobotLog.ee("Teleop", e, "Failed to stop drivetrain");
+        }
+        try {
+            if (intake != null) {
+                intake.stop();
+            }
+        } catch (RuntimeException e) {
+            RobotLog.ee("Teleop", e, "Failed to stop intake");
+        }
+        try {
+            if (transfer != null) {
+                transfer.stop();
+            }
+        } catch (RuntimeException e) {
+            RobotLog.ee("Teleop", e, "Failed to stop transfer");
+        }
+        try {
+            if (shooter != null) {
+                shooter.stop();
+            }
+        } catch (RuntimeException e) {
+            RobotLog.ee("Teleop", e, "Failed to stop shooter");
+        }
     }
 
     private void initializeFlowerMechanism() {
