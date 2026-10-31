@@ -39,7 +39,7 @@ public class Shooter {
 
     /** Uses FORWARD for both motors; readiness thresholds must be supplied explicitly. */
     public Shooter(HardwareMap hardwareMap, double velocityTolerance, double stableTimeSeconds) {
-        this(hardwareMap, DcMotorSimple.Direction.FORWARD, DcMotorSimple.Direction.FORWARD,
+        this(hardwareMap, DcMotorSimple.Direction.FORWARD, DcMotorSimple.Direction.REVERSE,
                 velocityTolerance, stableTimeSeconds);
     }
 

@@ -23,8 +23,8 @@ public class Teleop extends OpMode {
     private static final double PRECISION_SPEED_SCALE = 0.20;
     // Per-axis threshold in [0.0, 1.0); inputs outside it retain their original magnitude.
     private static final double JOYSTICK_DEADZONE = 0.05;
-    private static final double INTAKE_POWER = 0.80;
-    private static final double TRANSFER_POWER = 0.35;
+    private static final double INTAKE_POWER = 1.0;
+    private static final double TRANSFER_POWER = 1.0 ;
     // Reverse activates while the corresponding trigger exceeds this threshold.
     private static final float TRIGGER_THRESHOLD = 0.20f;
 

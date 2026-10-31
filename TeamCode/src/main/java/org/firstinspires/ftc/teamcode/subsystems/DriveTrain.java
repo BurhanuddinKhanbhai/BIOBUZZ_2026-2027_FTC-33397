@@ -26,8 +26,8 @@ public class DriveTrain {
      */
     public DriveTrain(HardwareMap hardwareMap) {
         this(hardwareMap,
-                DcMotorSimple.Direction.REVERSE, DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, DcMotorSimple.Direction.FORWARD,
+                DcMotorSimple.Direction.FORWARD, DcMotorSimple.Direction.REVERSE,
+                DcMotorSimple.Direction.FORWARD, DcMotorSimple.Direction.REVERSE,
                 DcMotor.ZeroPowerBehavior.BRAKE);
     }
 
