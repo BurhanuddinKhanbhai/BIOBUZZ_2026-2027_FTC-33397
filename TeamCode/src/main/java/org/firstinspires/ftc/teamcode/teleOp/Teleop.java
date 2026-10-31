@@ -36,17 +36,17 @@ public class Teleop extends OpMode {
     private static final double FLYWHEEL_STABLE_TIME_SECONDS = 0.25;
 
     // Unset until measured on the robot. NaN is never passed as a servo command or timing value.
-    private static final double POLLEN_ADJUSTMENT_POSITION = Double.NaN;
-    private static final double NECTAR_ADJUSTMENT_POSITION = Double.NaN;
-    private static final double ADJUSTMENT_SETTLING_SECONDS = Double.NaN;
+    private static final double POLLEN_ADJUSTMENT_POSITION = 0.30;
+    private static final double NECTAR_ADJUSTMENT_POSITION = 0.02;
+    private static final double ADJUSTMENT_SETTLING_SECONDS = 1;
     private static final Servo.Direction ADJUSTMENT_DIRECTION = Servo.Direction.FORWARD;
     private static final double COLOR_STABLE_TIME_SECONDS = Double.NaN;
     private static final BallColorSensor.ColorProfile POLLEN_COLOR_PROFILE = null;
     private static final BallColorSensor.ColorProfile NECTAR_COLOR_PROFILE = null;
     private static final long COLOR_MINIMUM_SIGNAL = -1;
     // Leave unset until safe flower travel positions have been measured on the mechanism.
-    private static final double FLOWER_RAISED_POSITION = Double.NaN;
-    private static final double FLOWER_LOWERED_POSITION = Double.NaN;
+    private static final double FLOWER_RAISED_POSITION = 0.23;
+    private static final double FLOWER_LOWERED_POSITION = 0.78;
 
     // Flywheel speed selection is independent of Shooter's ball/servo selection modes.
     private enum FlywheelSpeedMode { AUTO, MANUAL }
@@ -253,9 +253,13 @@ public class Teleop extends OpMode {
         // Choose exactly one Shooter before creating any flywheel motor objects.
         // Both motor directions remain FORWARD, as in the previous flywheel-only constructor.
         if (adjustmentAvailable && adjustmentCalibrated) {
-            shooter = new Shooter(hardwareMap, DcMotorSimple.Direction.FORWARD,
-                    DcMotorSimple.Direction.FORWARD, FLYWHEEL_VELOCITY_TOLERANCE,
-                    FLYWHEEL_STABLE_TIME_SECONDS, ADJUSTMENT_DIRECTION, ADJUSTMENT_SETTLING_SECONDS);
+            shooter = new Shooter(hardwareMap,
+                    DcMotorSimple.Direction.FORWARD,
+                    DcMotorSimple.Direction.REVERSE,
+                    FLYWHEEL_VELOCITY_TOLERANCE,
+                    FLYWHEEL_STABLE_TIME_SECONDS,
+                    ADJUSTMENT_DIRECTION,
+                    ADJUSTMENT_SETTLING_SECONDS);
             shooter.configureAdjustmentPositions(POLLEN_ADJUSTMENT_POSITION, NECTAR_ADJUSTMENT_POSITION);
         } else {
             shooter = new Shooter(hardwareMap, FLYWHEEL_VELOCITY_TOLERANCE,
