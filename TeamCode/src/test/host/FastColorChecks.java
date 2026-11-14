@@ -1,0 +1,345 @@
+package org.firstinspires.ftc.teamcode.sensors;
+
+import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.hardware.*;
+import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.teamcode.FastColorTest;
+import org.firstinspires.ftc.teamcode.subsystems.Shooter;
+import org.firstinspires.ftc.teamcode.teleOp.Teleop;
+
+import java.io.*;
+import java.lang.reflect.*;
+import java.nio.file.Files;
+import java.util.*;
+import java.util.zip.CRC32;
+
+/** Run with src/test/run_fast_color_checks.py; synthetic references are NOT robot calibration. */
+public final class FastColorChecks {
+    private static int checks;
+    private static void check(boolean condition, String reason) {
+        checks++;
+        if (!condition) throw new AssertionError(reason);
+    }
+    private static void near(double a, double b) { check(Math.abs(a - b) < 1e-6, a + " != " + b); }
+    private static Object field(Object target, String name) throws Exception {
+        Field f = target.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(target);
+    }
+    private static BallColorCalibration calibration() {
+        return new BallColorCalibration(reference(0, 0, 0, 12), reference(.3, .6, .1, 3), reference(.1, .2, .7, 4));
+    }
+    private static BallColorCalibration withRed() {
+        BallColorCalibration base = calibration();
+        return new BallColorCalibration(base.empty, base.pollen, base.nectar, reference(.75, .15, .10, 4));
+    }
+    /** Reproduce the original v1 format independently of the current serializer. */
+    private static byte[] legacyCalibration() throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(bytes)) {
+            out.writeInt(0x42424331); out.writeInt(1);
+            BallColorCalibration base = calibration();
+            for (BallColorCalibration.Reference r : new BallColorCalibration.Reference[]{base.empty, base.pollen, base.nectar}) {
+                out.writeDouble(r.red); out.writeDouble(r.green); out.writeDouble(r.blue); out.writeDouble(r.distanceCm);
+                out.writeInt(r.samples); out.writeInt(r.distanceSamples);
+            }
+        }
+        byte[] payload = bytes.toByteArray();
+        CRC32 crc = new CRC32(); crc.update(payload);
+        try (DataOutputStream out = new DataOutputStream(bytes)) { out.writeLong(crc.getValue()); }
+        return bytes.toByteArray();
+    }
+    private static void writeChecksummed(File file, byte[] bytes) throws IOException {
+        CRC32 crc = new CRC32(); crc.update(bytes, 0, bytes.length - 8);
+        try (DataOutputStream out = new DataOutputStream(new FileOutputStream(file))) {
+            out.write(bytes, 0, bytes.length - 8); out.writeLong(crc.getValue());
+        }
+    }
+    private static void sameReference(BallColorCalibration.Reference a, BallColorCalibration.Reference b) {
+        check(a.red == b.red && a.green == b.green && a.blue == b.blue
+                && Double.compare(a.distanceCm, b.distanceCm) == 0
+                && a.samples == b.samples && a.distanceSamples == b.distanceSamples, "Unchanged reference preserved exactly");
+    }
+    private static BallColorCalibration.Reference reference(double r, double g, double b, double d) {
+        return new BallColorCalibration.Reference(r, g, b, d, 12, Double.isNaN(d) ? 0 : 12);
+    }
+    private static void badCalibration(Runnable operation) {
+        boolean rejected = false;
+        try { operation.run(); } catch (IllegalArgumentException | IllegalStateException expected) { rejected = true; }
+        check(rejected, "Invalid calibration accepted");
+    }
+    private static final class Color {
+        float r = .3f, g = .6f, b = .1f;
+        double distance = 3;
+        int reads, distanceReads;
+        boolean failed;
+        final NormalizedColorSensor device = (NormalizedColorSensor) Proxy.newProxyInstance(
+                NormalizedColorSensor.class.getClassLoader(),
+                new Class<?>[]{NormalizedColorSensor.class, DistanceSensor.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("getNormalizedColors")) {
+                        reads++;
+                        if (failed) throw new IllegalStateException("disconnected");
+                        NormalizedRGBA rgba = new NormalizedRGBA();
+                        rgba.red = r; rgba.green = g; rgba.blue = b; rgba.alpha = 1;
+                        return rgba;
+                    }
+                    if (method.getName().equals("getDistance")) { distanceReads++; return distance; }
+                    throw new AssertionError("Unexpected sensor operation: " + method.getName());
+                });
+        void rgb(float r, float g, float b) { this.r = r; this.g = g; this.b = b; }
+    }
+    private static final class Motor {
+        double power, velocity;
+        DcMotorSimple.Direction direction;
+        final DcMotorEx device = (DcMotorEx) Proxy.newProxyInstance(DcMotorEx.class.getClassLoader(),
+                new Class<?>[]{DcMotorEx.class}, (proxy, method, args) -> {
+                    switch (method.getName()) {
+                        case "setPower": power = (double) args[0]; return null;
+                        case "setVelocity": velocity = (double) args[0]; return null;
+                        case "getVelocity": return velocity;
+                        case "setDirection": direction = (DcMotorSimple.Direction) args[0]; return null;
+                        case "setMode": check(args[0] != DcMotor.RunMode.STOP_AND_RESET_ENCODER, "Encoder reset"); return null;
+                        case "setZeroPowerBehavior": return null;
+                        default: throw new AssertionError("Unexpected motor call: " + method.getName());
+                    }
+                });
+    }
+    private static final class Adjustment {
+        int calls;
+        double position = Double.NaN;
+        final Servo device = (Servo) Proxy.newProxyInstance(Servo.class.getClassLoader(), new Class<?>[]{Servo.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("setDirection")) return null;
+                    if (method.getName().equals("setPosition")) { position = (double) args[0]; calls++; return null; }
+                    throw new AssertionError("Unexpected servo operation: " + method.getName());
+                });
+    }
+    private static HardwareMap hardware(File directory, Color color, Adjustment adjustment, Map<String, Motor> motors) {
+        HardwareMap map = new HardwareMap(directory);
+        if (color != null) map.put("ballColor", color.device);
+        map.put("shooterAdjust", adjustment.device);
+        for (String name : new String[]{"frontLeft", "frontRight", "backLeft", "backRight", "intake", "transfer", "flywheelA", "flywheelB"}) {
+            Motor motor = new Motor(); motors.put(name, motor); map.put(name, motor.device);
+        }
+        return map;
+    }
+    private static void initialize(OpMode op, HardwareMap map) {
+        op.hardwareMap = map;
+        op.telemetry = (Telemetry) Proxy.newProxyInstance(Telemetry.class.getClassLoader(), new Class<?>[]{Telemetry.class},
+                (proxy, method, args) -> method.getReturnType() == boolean.class ? false : null);
+        op.init(); op.start();
+    }
+    private static void rb(Teleop op) { op.gamepad2.right_bumper = true; op.loop(); op.gamepad2.right_bumper = false; op.loop(); }
+
+    public static void main(String[] args) throws Exception {
+        File directory = new File(args[0], "app-files"); check(directory.mkdir(), "Create app directory");
+        File file = new File(directory, BallColorCalibration.FILE_NAME);
+        Color color = new Color();
+        BallColorSensor detector = new BallColorSensor(color.device, file);
+        check(!detector.isCalibrated() && detector.getCalibrationStatus().startsWith("MISSING"), "Missing file");
+        detector.update(); detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "No calibration = unknown");
+        check(!detector.saveCalibration() && !file.exists(), "Incomplete calibration not saved");
+        byte[] legacy = legacyCalibration();
+        Files.write(file.toPath(), legacy);
+        detector = new BallColorSensor(color.device, file);
+        check(detector.isCalibrated() && detector.getCalibrationStatus().startsWith("LOADED"), "Automatic load");
+        check(detector.getCalibration().getFormatVersion() == 1 && !detector.isRedCalibrated()
+                && Arrays.equals(legacy, Files.readAllBytes(file.toPath())), "V1 loads without rewriting or inventing red");
+        detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "First reading unconfirmed");
+        detector.update(); check(detector.getBallType() == BallColorSensor.BallType.POLLEN, "Yellow confirmed");
+        check(Double.isFinite(detector.getReadTimeMs()) && Double.isFinite(detector.getConfirmationTimeMs()), "Timing telemetry");
+        int reads = color.reads; detector.getRedFraction(); detector.getStatus(); detector.getBallType();
+        check(color.reads == reads && color.reads == color.distanceReads, "Cached telemetry and one read per channel set");
+        color.rgb(.1f, .2f, .7f); detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Changed candidate clears old ball");
+        detector.update(); check(detector.getBallType() == BallColorSensor.BallType.NECTAR, "Blue confirmed");
+        color.rgb(.2f, .4f, .4f); detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Ambiguous/unmatched");
+        detector.configureCalibration(new BallColorCalibration(calibration().empty,
+                reference(.4, .5, .1, 3), reference(.45, .45, .1, 4)));
+        color.rgb(.425f, .475f, .1f); detector.update(); detector.update();
+        check(detector.getBestColorError() < BallColorCalibration.MAX_COLOR_DISTANCE
+                && detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Margin rejects close equally likely colors");
+        detector.configureCalibration(calibration());
+        color.rgb(1, 0, 0); detector.update(); detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Uncalibrated red");
+        color.rgb(.3f, .6f, .1f); color.distance = 15; detector.update(); detector.update();
+        check(detector.getStatus().equals("NO_OBJECT_NEAR"), "Proximity gate");
+        color.distance = Double.NaN; detector.update(); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.POLLEN, "Unreliable distance color-only fallback");
+        color.failed = true; detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN && !detector.hasColorSample(), "Disconnect clears stale values");
+        color.failed = false; detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Recovery confirms afresh");
+        detector.update(); check(detector.getBallType() == BallColorSensor.BallType.POLLEN, "Recovery");
+        color.rgb(Float.NaN, 0, 0); detector.update(); check(!detector.hasColorSample(), "Nonfinite rejected");
+        color.rgb(0, 0, 0); detector.update(); check(detector.hasColorSample() && !detector.hasValidReading(), "Dark EMPTY remains capturable");
+        check(new BallColorSensor(null, file).getBallType() == BallColorSensor.BallType.UNKNOWN, "Missing hardware safe");
+
+        withRed().save(file);
+        detector = new BallColorSensor(color.device, file);
+        check(detector.isRedCalibrated() && detector.getCalibration().getFormatVersion() == 2, "V2 red round trip");
+        sameReference(withRed().redNectar, detector.getCalibration().redNectar);
+        color.rgb(.75f, .15f, .10f); color.distance = 4;
+        detector.update(); check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Red requires confirmation");
+        detector.update(); check(detector.getBallType() == BallColorSensor.BallType.NECTAR, "Red confirmed as NECTAR");
+        color.rgb(.1f, .2f, .7f); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.NECTAR, "Blue and red share the same confirmed ball type");
+        color.rgb(.3f, .6f, .1f); detector.update(); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.POLLEN, "Yellow preserved with red configured");
+        color.rgb(.75f, .15f, .10f); color.distance = 15; detector.update(); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN && detector.getStatus().equals("NO_OBJECT_NEAR"), "Red proximity gate");
+        detector.configureCalibration(new BallColorCalibration(calibration().empty, calibration().pollen,
+                calibration().nectar, reference(.75, .15, .10, Double.NaN)));
+        color.rgb(.3f, .6f, .1f); detector.update(); detector.update();
+        check(detector.getStatus().equals("NO_OBJECT_NEAR"), "Missing red proximity must not disable yellow/blue gating");
+        color.rgb(.75f, .15f, .10f); color.distance = Double.NaN; detector.update(); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.NECTAR, "Red color-only fallback when distance is unreliable");
+        detector.configureCalibration(new BallColorCalibration(calibration().empty, calibration().pollen,
+                calibration().nectar, reference(.35, .55, .1, 4)));
+        color.rgb(.325f, .575f, .1f); color.distance = 4; detector.update(); detector.update();
+        check(detector.getBestColorError() < BallColorCalibration.MAX_COLOR_DISTANCE
+                && detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Red/yellow ambiguity rejected");
+        detector.configureCalibration(new BallColorCalibration(reference(.2, .3, .5, 12), calibration().pollen,
+                calibration().nectar, withRed().redNectar));
+        color.rgb(.2f, .3f, .5f); detector.update(); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN, "Illuminated EMPTY rejected even within proximity gate");
+        color.rgb(0, 0, 0); detector.update();
+        check(detector.getBallType() == BallColorSensor.BallType.UNKNOWN && detector.getStatus().equals("WEAK_SIGNAL"), "Dark EMPTY never a ball");
+
+        BallColorCalibration.Samples dark = new BallColorCalibration.Samples();
+        for (int i = 0; i < 12; i++) dark.add(0, 0, 0, Double.NaN);
+        BallColorCalibration darkCalibration = new BallColorCalibration(dark.average(), calibration().pollen, calibration().nectar);
+        check(Double.isNaN(darkCalibration.getGateDistanceCm()), "No invented distance");
+        dark.add(.2, .3, .5, 10); // Mixed dark and lit EMPTY is valid even with fraction sum < 1.
+        new BallColorCalibration(dark.average(), calibration().pollen, calibration().nectar).save(file);
+        near(BallColorCalibration.load(file).empty.red, .2 / 13);
+        badCalibration(() -> new BallColorCalibration.Samples().average());
+        badCalibration(() -> new BallColorCalibration(reference(0, 0, 0, 12), reference(0, 0, 0, 3), calibration().nectar));
+        badCalibration(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().pollen));
+        badCalibration(() -> new BallColorCalibration(reference(Double.NaN, 0, 0, 12), calibration().pollen, calibration().nectar));
+        badCalibration(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().nectar,
+                new BallColorCalibration.Reference(.75, .15, .1, 4, 11, 11)));
+        badCalibration(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().nectar,
+                calibration().pollen));
+        withRed().save(file);
+        byte[] redSaved = Files.readAllBytes(file.toPath());
+        byte[] badRed = redSaved.clone(); java.nio.ByteBuffer.wrap(badRed).putDouble(129, Double.NaN);
+        writeChecksummed(file, badRed);
+        check(!new BallColorSensor(color.device, file).isCalibrated(), "Corrupt red values reject file, not silently dropped");
+        byte[] badPresence = redSaved.clone(); badPresence[128] = 2; writeChecksummed(file, badPresence);
+        check(!new BallColorSensor(color.device, file).isCalibrated(), "Invalid optional-red presence rejected");
+        calibration().save(file);
+        byte[] saved = Files.readAllBytes(file.toPath());
+        check(BallColorCalibration.load(file).redNectar == null && BallColorCalibration.load(file).getFormatVersion() == 2,
+                "V2 without red retains yellow/blue calibration");
+        byte[] corrupt = saved.clone(); corrupt[12] ^= 1; Files.write(file.toPath(), corrupt);
+        check(!new BallColorSensor(color.device, file).isCalibrated(), "Checksum corruption rejected");
+        Files.write(file.toPath(), Arrays.copyOf(saved, 20));
+        check(!new BallColorSensor(color.device, file).isCalibrated(), "Truncated file rejected");
+        byte[] wrongVersion = saved.clone(); wrongVersion[7] = 99;
+        CRC32 crc = new CRC32(); crc.update(wrongVersion, 0, wrongVersion.length - 8);
+        try (DataOutputStream out = new DataOutputStream(new FileOutputStream(file))) {
+            out.write(wrongVersion, 0, wrongVersion.length - 8); out.writeLong(crc.getValue());
+        }
+        check(!new BallColorSensor(color.device, file).isCalibrated(), "Version rejected despite valid checksum");
+        byte[] invalidValues = saved.clone(); java.nio.ByteBuffer.wrap(invalidValues).putDouble(48, Double.NaN);
+        crc.reset(); crc.update(invalidValues, 0, invalidValues.length - 8);
+        try (DataOutputStream out = new DataOutputStream(new FileOutputStream(file))) {
+            out.write(invalidValues, 0, invalidValues.length - 8); out.writeLong(crc.getValue());
+        }
+        check(!new BallColorSensor(color.device, file).isCalibrated(), "Nonfinite reference rejected despite valid checksum");
+        calibration().save(file);
+        BallColorSensor incomplete = new BallColorSensor(color.device, file); incomplete.clearCalibration();
+        check(!incomplete.saveCalibration() && Arrays.equals(saved, Files.readAllBytes(file.toPath())), "Failed incomplete save preserves old calibration");
+        File unwritableTarget = new File(directory, "directory-not-file"); check(unwritableTarget.mkdir(), "Create failure fixture");
+        boolean failedSave = false;
+        try { calibration().save(unwritableTarget); } catch (IOException expected) { failedSave = true; }
+        check(failedSave && Arrays.equals(saved, Files.readAllBytes(file.toPath())), "Failed replacement leaves valid saved file");
+
+        withRed().save(file);
+        color.rgb(.3f, .6f, .1f); color.distance = 3;
+        Adjustment adjustment = new Adjustment(); Map<String, Motor> motors = new HashMap<>();
+        Teleop op = new Teleop(); initialize(op, hardware(directory, color, adjustment, motors));
+        check(adjustment.calls == 0, "No init servo movement");
+        reads = color.reads; op.loop(); check(adjustment.calls == 0 && color.reads == reads + 1, "One coordinator update");
+        op.loop(); near(adjustment.position, .21);
+        Shooter shooter = (Shooter) field(op, "shooter");
+        long commandTime = (long) field(shooter, "adjustmentCommandNanos");
+        op.loop(); check(adjustment.calls == 1 && (long) field(shooter, "adjustmentCommandNanos") == commandTime, "No repeated command/timer restart");
+        shooter.setAdjustmentSettlingSeconds(3600); // A long test interval must not delay physical commands.
+        color.rgb(.1f, .2f, .7f); op.loop(); near(adjustment.position, .21); op.loop(); near(adjustment.position, .00);
+        check(!shooter.isAdjustmentSettled(), "Settling independent of servo command");
+        int nectarCommands = adjustment.calls;
+        commandTime = (long) field(shooter, "adjustmentCommandNanos");
+        color.rgb(.75f, .15f, .10f); op.loop(); op.loop(); near(adjustment.position, .00);
+        check(shooter.getSelectedBallType() == Shooter.BallType.NECTAR && adjustment.calls == nectarCommands
+                && (long) field(shooter, "adjustmentCommandNanos") == commandTime, "Red selects same nectar preset without re-command or timer restart");
+        color.rgb(.3f, .6f, .1f); op.loop(); op.loop(); near(adjustment.position, .21);
+        color.rgb(.75f, .15f, .10f); op.loop(); near(adjustment.position, .21); op.loop(); near(adjustment.position, .00);
+        rb(op); near(adjustment.position, .21); check(shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_POLLEN, "Manual pollen ignores red");
+        op.gamepad2.right_bumper = true; op.loop(); int commanded = adjustment.calls; op.loop();
+        check(adjustment.calls == commanded && shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_NECTAR, "RB hold cycles once");
+        op.gamepad2.right_bumper = false; op.loop(); color.failed = true; rb(op);
+        check(shooter.getSelectedBallType() == Shooter.BallType.UNKNOWN && !shooter.isReadyToFeed(), "AUTO disconnected cannot retain manual identification");
+        color.failed = false;
+        op.gamepad2.x = true; op.gamepad2.left_trigger = .3f; op.loop();
+        near(motors.get("intake").power, -1); near(motors.get("transfer").power, 1);
+        op.gamepad2.right_trigger = .3f; op.loop(); near(motors.get("transfer").power, -1);
+        op.gamepad2.x = false; op.gamepad2.left_trigger = op.gamepad2.right_trigger = 0;
+        op.gamepad2.y = op.gamepad2.left_bumper = op.gamepad2.dpad_up = true; op.loop();
+        near(motors.get("flywheelA").velocity, 50); near(motors.get("flywheelB").velocity, 50);
+        op.loop(); near(motors.get("flywheelA").velocity, 50);
+        check(motors.get("flywheelA").direction == DcMotorSimple.Direction.FORWARD
+                && motors.get("flywheelB").direction == DcMotorSimple.Direction.REVERSE, "Flywheel directions preserved");
+        op.stop(); for (Motor motor : motors.values()) { near(motor.power, 0); near(motor.velocity, 0); }
+
+        check(file.delete(), "Remove calibration fixture");
+        adjustment = new Adjustment(); Teleop manual = new Teleop();
+        initialize(manual, hardware(directory, null, adjustment, new HashMap<>()));
+        rb(manual); near(adjustment.position, .21); rb(manual); near(adjustment.position, .00);
+        rb(manual); check(((Shooter) field(manual, "shooter")).getSelectedBallType() == Shooter.BallType.UNKNOWN, "Manual without sensor/calibration; return AUTO unknown");
+
+        FastColorTest test = new FastColorTest(); adjustment = new Adjustment();
+        initialize(test, hardware(directory, color, adjustment, new HashMap<>()));
+        test.gamepad1.dpad_up = true; test.loop(); check(!file.exists(), "Test cannot save incomplete groups"); test.gamepad1.dpad_up = false;
+        color.rgb(0, 0, 0); color.distance = 12; test.gamepad1.x = true;
+        for (int i = 0; i < 12; i++) test.loop();
+        test.gamepad1.x = false; test.gamepad1.y = true; color.rgb(.3f, .6f, .1f); color.distance = 3;
+        for (int i = 0; i < 12; i++) test.loop();
+        test.gamepad1.y = false; test.gamepad1.b = true; color.rgb(.1f, .2f, .7f); color.distance = 4;
+        for (int i = 0; i < 12; i++) test.loop();
+        check(adjustment.calls == 0 && !file.exists(), "Collecting never moves/saves automatically");
+        test.gamepad1.b = false; test.gamepad1.dpad_up = true; test.loop();
+        check(file.exists() && BallColorCalibration.load(file).empty.samples == 12, "Explicit save includes dark EMPTY");
+        near(BallColorCalibration.load(file).empty.red, 0);
+        test.gamepad1.a = true; test.loop(); near(adjustment.position, .02);
+        check(new BallColorSensor(color.device, file).isCalibrated(), "Saved test data reloads for competition");
+
+        // Upgrade only red using a real v1 fixture, preserving every existing reference exactly.
+        Files.write(file.toPath(), legacy);
+        test = new FastColorTest(); adjustment = new Adjustment();
+        initialize(test, hardware(directory, color, adjustment, new HashMap<>()));
+        check(adjustment.calls == 0 && Arrays.equals(legacy, Files.readAllBytes(file.toPath())), "Loading v1 never moves or rewrites");
+        test.gamepad1.left_bumper = test.gamepad1.y = test.gamepad1.a = true;
+        test.loop();
+        check(((BallColorCalibration.Samples) field(test, "redNectar")).getCount() == 0
+                && ((BallColorCalibration.Samples) field(test, "pollen")).getCount() == 0
+                && adjustment.calls == 0, "Conflicting sample buttons ignored; A cannot move while capturing");
+        test.gamepad1.y = test.gamepad1.a = false;
+        color.rgb(0, 0, 0); test.loop(); color.rgb(Float.NaN, 0, 0); test.loop();
+        check(((BallColorCalibration.Samples) field(test, "redNectar")).getCount() == 0, "Weak and invalid red samples excluded");
+        color.rgb(.75f, .15f, .10f); color.distance = 4;
+        for (int i = 0; i < 11; i++) test.loop();
+        test.gamepad1.left_bumper = false; test.gamepad1.dpad_up = true; test.loop();
+        check(Arrays.equals(legacy, Files.readAllBytes(file.toPath())), "11 red samples cannot replace working calibration");
+        test.gamepad1.dpad_up = false; test.loop();
+        test.gamepad1.left_bumper = test.gamepad1.dpad_up = true; test.loop(); // Twelfth sample, but saving while capturing is blocked.
+        check(Arrays.equals(legacy, Files.readAllBytes(file.toPath())), "Save while capturing blocked");
+        test.gamepad1.left_bumper = false; test.loop();
+        check(Arrays.equals(legacy, Files.readAllBytes(file.toPath())), "Held save does not trigger after capture release");
+        test.gamepad1.dpad_up = false; test.loop(); test.gamepad1.dpad_up = true; test.loop();
+        BallColorCalibration upgraded = BallColorCalibration.load(file);
+        check(upgraded.getFormatVersion() == 2 && upgraded.redNectar.samples == 12, "Explicit red-only save upgrades v1 with 12 valid samples");
+        sameReference(calibration().empty, upgraded.empty); sameReference(calibration().pollen, upgraded.pollen);
+        sameReference(calibration().nectar, upgraded.nectar);
+        test.gamepad1.a = true; test.loop(); near(adjustment.position, .02);
+        color.rgb(.3f, .6f, .1f); test.loop(); test.loop(); near(adjustment.position, .30);
+        color.rgb(.1f, .2f, .7f); test.loop(); test.loop(); near(adjustment.position, .02);
+        check(new BallColorSensor(color.device, file).isRedCalibrated(), "Saved red reloads for competition");
+        System.out.println("PASS: " + checks + " focused checks; no physical hardware or follower constructed.");
+    }
+}

@@ -2,7 +2,6 @@ package org.firstinspires.ftc.teamcode.teleOp;
 
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
-import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.RobotLog;
@@ -19,8 +18,8 @@ import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 @TeleOp(name = "BIOBUZZ TeleOp", group = "Competition")
 public class Teleop extends OpMode {
     // Initial limits for an untested robot; tune within [0.0, 1.0] after hardware validation.
-    private static final double NORMAL_SPEED_SCALE = 0.40;
-    private static final double PRECISION_SPEED_SCALE = 0.20;
+    private static final double NORMAL_SPEED_SCALE = 1.0;
+    private static final double PRECISION_SPEED_SCALE = 0.6;
     // Per-axis threshold in [0.0, 1.0); inputs outside it retain their original magnitude.
     private static final double JOYSTICK_DEADZONE = 0.05;
     private static final double INTAKE_POWER = 1.0;
@@ -36,17 +35,13 @@ public class Teleop extends OpMode {
     private static final double FLYWHEEL_STABLE_TIME_SECONDS = 0.25;
 
     // Unset until measured on the robot. NaN is never passed as a servo command or timing value.
-    private static final double POLLEN_ADJUSTMENT_POSITION = 0.30;
-    private static final double NECTAR_ADJUSTMENT_POSITION = 0.02;
-    private static final double ADJUSTMENT_SETTLING_SECONDS = 1;
+    private static final double POLLEN_ADJUSTMENT_POSITION = 0.21;
+    private static final double NECTAR_ADJUSTMENT_POSITION = 0.0;
+    private static final double ADJUSTMENT_SETTLING_SECONDS = .05;
     private static final Servo.Direction ADJUSTMENT_DIRECTION = Servo.Direction.FORWARD;
-    private static final double COLOR_STABLE_TIME_SECONDS = Double.NaN;
-    private static final BallColorSensor.ColorProfile POLLEN_COLOR_PROFILE = null;
-    private static final BallColorSensor.ColorProfile NECTAR_COLOR_PROFILE = null;
-    private static final long COLOR_MINIMUM_SIGNAL = -1;
     // Leave unset until safe flower travel positions have been measured on the mechanism.
-    private static final double FLOWER_RAISED_POSITION = 0.23;
-    private static final double FLOWER_LOWERED_POSITION = 0.78;
+    private static final double FLOWER_RAISED_POSITION = 0.31;
+    private static final double FLOWER_LOWERED_POSITION = 0.83;
 
     // Flywheel speed selection is independent of Shooter's ball/servo selection modes.
     private enum FlywheelSpeedMode { AUTO, MANUAL }
@@ -269,15 +264,9 @@ public class Teleop extends OpMode {
         previousBallSelectionButton = false;
         shooter.setAutoMode(); // No position command, even with a fully calibrated servo.
 
-        colorSensorAvailable = hardwareMap.tryGet(ColorSensor.class, "ballColor") != null;
-        // The sensor API requires positive stability time; leave AUTO unavailable until configured.
-        ballColorSensor = Double.isFinite(COLOR_STABLE_TIME_SECONDS) && COLOR_STABLE_TIME_SECONDS > 0.0
-                ? new BallColorSensor(hardwareMap, COLOR_STABLE_TIME_SECONDS) : null;
-        if (ballColorSensor != null && POLLEN_COLOR_PROFILE != null && NECTAR_COLOR_PROFILE != null
-                && COLOR_MINIMUM_SIGNAL >= 0) {
-            ballColorSensor.configureCalibration(POLLEN_COLOR_PROFILE, NECTAR_COLOR_PROFILE,
-                    COLOR_MINIMUM_SIGNAL);
-        }
+        // Load only validated Fast Color references; missing/corrupt data leaves AUTO UNKNOWN.
+        ballColorSensor = new BallColorSensor(hardwareMap);
+        colorSensorAvailable = ballColorSensor.isAvailable();
         shootingCoordinator = new ShootingCoordinator(shooter, ballColorSensor);
     }
 
@@ -308,10 +297,20 @@ public class Teleop extends OpMode {
         telemetry.addData("Requested ball type", getRequestedBallType());
         telemetry.addData("Applied ball type", shooter.getSelectedBallType());
         telemetry.addData("Color sensor mapped", colorSensorAvailable);
-        telemetry.addData("Color calibration", ballColorSensor != null && ballColorSensor.isCalibrated()
-                ? "CONFIGURED" : "UNCALIBRATED");
-        telemetry.addData("Color sensor status", ballColorSensor != null ? ballColorSensor.getStatus()
-                : (colorSensorAvailable ? "UNCALIBRATED STABILITY TIME" : "MISSING"));
+        telemetry.addData("Color calibration", ballColorSensor.getCalibrationStatus());
+        telemetry.addData("Color sensor status", ballColorSensor.getStatus());
+        // Cached values only: the coordinator owns the single update/read for this loop.
+        telemetry.addData("Color RGB fractions", "%.3f / %.3f / %.3f",
+                ballColorSensor.getRedFraction(), ballColorSensor.getGreenFraction(), ballColorSensor.getBlueFraction());
+        telemetry.addData("Color distance / gate (cm)", "%.2f / %.2f (NaN = color-only)",
+                ballColorSensor.getDistanceCm(), ballColorSensor.getGateDistanceCm());
+        telemetry.addData("Color error / margin", "%.3f / %.3f",
+                ballColorSensor.getBestColorError(), ballColorSensor.getColorMargin());
+        telemetry.addData("Color confirm readings", ballColorSensor.getConsecutiveReadings());
+        telemetry.addData("Color read / confirmation (ms)", "%.2f / %.2f",
+                ballColorSensor.getReadTimeMs(), ballColorSensor.getConfirmationTimeMs());
+        telemetry.addData("Color support", ballColorSensor.isRedCalibrated()
+                ? "Yellow pollen / blue + red nectar" : "Yellow pollen / blue nectar; red nectar UNCALIBRATED");
         telemetry.addData("Shooter servo mapped", adjustmentAvailable);
         telemetry.addData("Shooter servo calibration", adjustmentCalibrated ? "CONFIGURED" : "UNCALIBRATED");
         double position = shooter.getAdjustmentTargetPosition();
