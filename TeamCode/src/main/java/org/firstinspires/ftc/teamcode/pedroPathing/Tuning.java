@@ -6,6 +6,8 @@ import static org.firstinspires.ftc.teamcode.pedroPathing.Tuning.drawCurrentAndH
 import static org.firstinspires.ftc.teamcode.pedroPathing.Tuning.follower;
 import static org.firstinspires.ftc.teamcode.pedroPathing.Tuning.stopRobot;
 import static org.firstinspires.ftc.teamcode.pedroPathing.Tuning.telemetryM;
+import org.firstinspires.ftc.teamcode.subsystems.DriveTrain;
+import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 
 import com.bylazar.configurables.PanelsConfigurables;
 import com.bylazar.configurables.annotations.Configurable;
@@ -99,6 +101,9 @@ public class Tuning extends SelectableOpMode {
 
     @Override
     public void onSelect() {
+        new DriveTrain(hardwareMap);
+        new Transfer(hardwareMap);
+
         if (follower == null) {
             follower = Constants.createFollower(hardwareMap);
             PanelsConfigurables.INSTANCE.refreshClass(this);
