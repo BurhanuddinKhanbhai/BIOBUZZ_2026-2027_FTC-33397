@@ -13,7 +13,7 @@ public class Intake {
 
     /** Uses FORWARD direction and full power for intake/reverse commands. */
     public Intake(HardwareMap hardwareMap) {
-        this(hardwareMap, DcMotorSimple.Direction.FORWARD, 1.0);
+        this(hardwareMap, DcMotorSimple.Direction.REVERSE, 1.0);
     }
 
     /**

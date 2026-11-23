@@ -13,7 +13,7 @@ public class Transfer {
 
     /** Uses FORWARD direction and full power for feed/reverse commands. */
     public Transfer(HardwareMap hardwareMap) {
-        this(hardwareMap, DcMotorSimple.Direction.FORWARD, 1.0);
+        this(hardwareMap, DcMotorSimple.Direction.REVERSE, 1.0);
     }
 
     /**

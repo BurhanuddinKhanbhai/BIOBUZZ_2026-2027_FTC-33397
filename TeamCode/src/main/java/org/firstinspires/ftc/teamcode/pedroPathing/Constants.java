@@ -4,15 +4,17 @@ import com.pedropathing.control.FilteredPIDFCoefficients;
 import com.pedropathing.control.PIDFCoefficients;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.follower.FollowerConstants;
-import com.pedropathing.ftc.FollowerBuilder;
 import com.pedropathing.ftc.drivetrains.Mecanum;
 import com.pedropathing.ftc.drivetrains.MecanumConstants;
+import com.pedropathing.geometry.Pose;
 import com.pedropathing.math.Vector;
 import com.pedropathing.paths.PathConstraints;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+
+import java.util.function.Consumer;
 
 public class Constants {
     // Existing Pedro settings are retained, but are NOT certified robot calibration.
@@ -31,19 +33,72 @@ public class Constants {
     public static double mecanumMotorCachingThreshold = Double.NaN;
 
     // These names must be assigned to the stated ports in the Robot Controller configuration.
-    private static final String FRONT_LEFT = "frontLeft";   // Control Hub (left), motor/encoder 0
-    private static final String BACK_LEFT = "backLeft";     // Control Hub (left), motor 1
-    private static final String FRONT_RIGHT = "frontRight"; // Expansion Hub (right), motor/encoder 0
-    private static final String BACK_RIGHT = "backRight";   // Expansion Hub (right), motor 1
-    private static final String PERPENDICULAR = "intake";   // Control Hub, motor/encoder 3
+    private static final String FRONT_LEFT = "frontLeft";   // Expansion Hub (left), motor/encoder 0
+    private static final String BACK_LEFT = "backLeft";     // Expansion Hub (left), motor 1
+    private static final String FRONT_RIGHT = "frontRight"; // Control Hub (right), motor/encoder 0
+    private static final String BACK_RIGHT = "backRight";   // Control Hub (right), motor 1
+    private static final String PERPENDICULAR = "transfer"; // Expansion Hub (left), motor/encoder 3
+
+    /**
+     * Read-only preflight for OpMode telemetry. Returns null only when configuration and
+     * the review guard pass; never accesses hardware or constructs a follower.
+     * HardwareMap grouping, ports, stopped motors and modes are still checked by the factory.
+     */
+    public static String getConfigurationIssue() {
+        StringBuilder issues = new StringBuilder();
+        if (odometryConfiguration == null) {
+            appendIssue(issues, "odometry wheel/encoder data, three signs, signed offsets, correction factors and sample limits");
+        }
+        if (!Double.isFinite(mecanumForwardVelocity) || mecanumForwardVelocity <= 0.0) {
+            appendIssue(issues, "measured mecanum forward velocity");
+        }
+        if (!Double.isFinite(mecanumLateralVelocity) || mecanumLateralVelocity <= 0.0) {
+            appendIssue(issues, "measured mecanum lateral velocity");
+        }
+        if (!Double.isFinite(mecanumMaxPower) || mecanumMaxPower <= 0.0 || mecanumMaxPower > 1.0) {
+            appendIssue(issues, "verified mecanum maximum power in (0, 1]");
+        }
+        if (!Double.isFinite(mecanumMotorCachingThreshold) || mecanumMotorCachingThreshold < 0.0
+                || (Double.isFinite(mecanumMaxPower) && mecanumMotorCachingThreshold >= mecanumMaxPower)) {
+            appendIssue(issues, "motor caching threshold (nonnegative and below maximum power)");
+        }
+        if (followerConstants == null || pathConstraints == null) {
+            appendIssue(issues, "follower/path settings");
+        }
+        if (issues.length() == 0) {
+            try {
+                validateCalibration();
+            } catch (IllegalStateException invalid) {
+                appendIssue(issues, invalid.getMessage());
+            }
+        }
+        if (!HARDWARE_AND_CALIBRATION_VERIFIED) {
+            appendIssue(issues, "hardware, encoder directions, odometry geometry and follower tuning review guard remains closed");
+        }
+        return issues.length() == 0 ? null : issues.toString();
+    }
+
+    private static void appendIssue(StringBuilder issues, String issue) {
+        if (issues.length() != 0) issues.append("; ");
+        issues.append(issue);
+    }
 
     /**
      * Guarded integration only: never enable this factory by supplying guessed calibration.
-     * Before a future handover, initialize/stop the normal drivetrain and intake owners.
+     * Before a future handover, initialize/stop the normal drivetrain and transfer owners.
      * Their modes/directions must remain stable; never drive through two owners concurrently.
      * Numeric validation and the review guard precede ALL HardwareMap/device access.
      */
     public static Follower createFollower(HardwareMap hardwareMap) {
+        return createFollower(hardwareMap, null);
+    }
+
+    /**
+     * Optional field-clearance validation runs on each fresh pose BEFORE Pedro can write
+     * driving output. Validation failure throws; the caller must latch failure and stop
+     * every motor independently. It must not retry a failed active motion automatically.
+     */
+    public static Follower createFollower(HardwareMap hardwareMap, Consumer<Pose> poseValidator) {
         validateCalibration();
         require(HARDWARE_AND_CALIBRATION_VERIFIED,
                 "hardware layout, motor directions, odometry and Pedro follower tuning are not verified");
@@ -63,11 +118,20 @@ public class Constants {
         drivetrain.updateConstants();
         SafeThreeWheelLocalizer localizer = new SafeThreeWheelLocalizer(
                 frontLeft, frontRight, perpendicular, odometryConfiguration);
-        Follower follower = new FollowerBuilder(followerConstants, hardwareMap)
-                .setDrivetrain(drivetrain)
-                .setLocalizer(localizer)
-                .pathConstraints(pathConstraints)
-                .build();
+        // Preserve FollowerBuilder.pathConstraints()'s default-constraint behavior.
+        PathConstraints.setDefaultConstraints(pathConstraints);
+        Follower follower = new Follower(followerConstants, localizer, drivetrain, pathConstraints) {
+            @Override
+            public void updatePose() {
+                super.updatePose();
+                // Pedro 2.1.2 does not check Localizer.isNAN() before runDrive(). A rejected
+                // localizer sample retains its last finite pose, so a post-update check is late.
+                if (!localizer.isSampleValid() || localizer.isNAN()) {
+                    throw new IllegalStateException("Invalid odometry feedback: " + localizer.getStatus());
+                }
+                if (poseValidator != null) poseValidator.accept(getPose());
+            }
+        };
         follower.setMaxPower(mecanumMaxPower);
         // Follower construction calls breakFollowing(), which selects FLOAT. Restore the
         // existing DriveTrain's stopped BRAKE behavior without entering follower TeleOp mode.
@@ -80,11 +144,12 @@ public class Constants {
         MecanumConstants settings = new MecanumConstants()
                 .leftFrontMotorName(FRONT_LEFT).leftRearMotorName(BACK_LEFT)
                 .rightFrontMotorName(FRONT_RIGHT).rightRearMotorName(BACK_RIGHT)
-                // Match DriveTrain's existing defaults; these still need physical verification.
-                .leftFrontMotorDirection(DcMotorSimple.Direction.REVERSE)
-                .leftRearMotorDirection(DcMotorSimple.Direction.REVERSE)
-                .rightFrontMotorDirection(DcMotorSimple.Direction.FORWARD)
-                .rightRearMotorDirection(DcMotorSimple.Direction.FORWARD)
+                // Match the current DriveTrain constructor used by competition TeleOp.
+                // Encoder signs must be calibrated with these motor directions in place.
+                .leftFrontMotorDirection(DcMotorSimple.Direction.FORWARD)
+                .leftRearMotorDirection(DcMotorSimple.Direction.FORWARD)
+                .rightFrontMotorDirection(DcMotorSimple.Direction.REVERSE)
+                .rightRearMotorDirection(DcMotorSimple.Direction.REVERSE)
                 .xVelocity(mecanumForwardVelocity).yVelocity(mecanumLateralVelocity)
                 .maxPower(mecanumMaxPower).motorCachingThreshold(mecanumMotorCachingThreshold)
                 .useBrakeModeInTeleOp(true).useVoltageCompensation(false);
@@ -156,18 +221,18 @@ public class Constants {
         require(frontLeft.getPortNumber() == 0 && backLeft.getPortNumber() == 1
                         && frontRight.getPortNumber() == 0 && backRight.getPortNumber() == 1
                         && perpendicular.getPortNumber() == 3,
-                "expected left hub frontLeft=0/backLeft=1/intake=3; right hub frontRight=0/backRight=1");
+                "expected left Expansion Hub frontLeft=0/backLeft=1/transfer=3; right Control Hub frontRight=0/backRight=1");
         for (DcMotorEx motor : new DcMotorEx[]{frontLeft, backLeft, frontRight, backRight, perpendicular}) {
             require(motor.getMode() == DcMotor.RunMode.RUN_WITHOUT_ENCODER,
-                    "drivetrain and intake must already use RUN_WITHOUT_ENCODER; the factory will not change shared-channel modes");
-            require(motor.getPower() == 0.0, "drivetrain/intake owners must stop motors before follower handover");
+                    "drivetrain and transfer must already use RUN_WITHOUT_ENCODER; the factory will not change shared-channel modes");
+            require(motor.getPower() == 0.0, "drivetrain/transfer owners must stop motors before follower handover");
         }
-        require(frontLeft.getDirection() == DcMotorSimple.Direction.REVERSE
-                        && backLeft.getDirection() == DcMotorSimple.Direction.REVERSE
-                        && frontRight.getDirection() == DcMotorSimple.Direction.FORWARD
-                        && backRight.getDirection() == DcMotorSimple.Direction.FORWARD,
+        require(frontLeft.getDirection() == DcMotorSimple.Direction.FORWARD
+                        && backLeft.getDirection() == DcMotorSimple.Direction.FORWARD
+                        && frontRight.getDirection() == DcMotorSimple.Direction.REVERSE
+                        && backRight.getDirection() == DcMotorSimple.Direction.REVERSE,
                 "motor directions must match DriveTrain before follower handover");
-        // Do not configure intake: it only supplies perpendicular counts here. Its direction
+        // Do not configure transfer: it only supplies perpendicular counts here. Its direction
         // must be established by its owner before encoder signs are calibrated/baselined.
     }
 

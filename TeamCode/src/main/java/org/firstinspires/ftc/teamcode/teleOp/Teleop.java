@@ -75,8 +75,8 @@ public class Teleop extends OpMode {
         // Retain DriveTrain's motor directions, BRAKE behavior, and encoder-safe motor modes.
         driveTrain = new DriveTrain(hardwareMap);
         driveTrain.setSpeedScale(NORMAL_SPEED_SCALE);
-        intake = new Intake(hardwareMap, DcMotorSimple.Direction.FORWARD, INTAKE_POWER);
-        transfer = new Transfer(hardwareMap, DcMotorSimple.Direction.FORWARD, TRANSFER_POWER);
+        intake = new Intake(hardwareMap, DcMotorSimple.Direction.REVERSE, INTAKE_POWER);
+        transfer = new Transfer(hardwareMap, DcMotorSimple.Direction.REVERSE, TRANSFER_POWER);
         initializeBallSelection();
         initializeFlowerMechanism();
         flywheelSpeedMode = FlywheelSpeedMode.AUTO;
