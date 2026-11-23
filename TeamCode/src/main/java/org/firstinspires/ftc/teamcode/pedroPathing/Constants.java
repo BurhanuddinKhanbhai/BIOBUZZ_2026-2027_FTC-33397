@@ -48,10 +48,10 @@ public class Constants {
                     0.5           // Maximum sampling interval in seconds
             );
 
-    public static double mecanumForwardVelocity = Double.NaN; // inches/second
-    public static double mecanumLateralVelocity = Double.NaN; // inches/second
-    public static double mecanumMaxPower = Double.NaN;
-    public static double mecanumMotorCachingThreshold = Double.NaN;
+    public static double mecanumForwardVelocity = 81.34056;
+    public static double mecanumLateralVelocity = 65.43028;
+    public static double mecanumMaxPower = 0.25;
+    public static double mecanumMotorCachingThreshold = 0.01;
 
     // These names must be assigned to the stated ports in the Robot Controller configuration.
     private static final String FRONT_LEFT = "frontLeft";   // Expansion Hub (left), motor/encoder 0
