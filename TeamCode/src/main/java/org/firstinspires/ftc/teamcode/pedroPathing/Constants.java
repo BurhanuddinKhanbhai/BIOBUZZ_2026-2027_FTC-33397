@@ -42,7 +42,7 @@ public class Constants {
                     RIGHT_Y,
                     PERPENDICULAR_X,
 
-                    1.0, 1.0, 1.0,  // Initial distance correction multipliers
+                    1.1032, 1.0, 1.1062,  // Initial distance correction multipliers
 
                     100000.0,     // Provisional maximum encoder ticks/sec
                     0.5           // Maximum sampling interval in seconds

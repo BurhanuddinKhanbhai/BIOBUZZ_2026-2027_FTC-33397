@@ -421,8 +421,9 @@ class ForwardTuner extends OpMode {
     /** This initializes the PoseUpdater as well as the Panels telemetry. */
     @Override
     public void init_loop() {
-        telemetryM.debug("Pull your robot forward " + DISTANCE + " inches. Your forward ticks to inches will be shown on the telemetry.");
-        telemetryM.update(telemetry);
+        Tuning.updateFollower();
+
+        telemetryM.debug("Pull your robot forward " + DISTANCE + " inches. Your forward ticks to inches will be shown on the telemetry.");telemetryM.update(telemetry);
         drawCurrent();
     }
 
