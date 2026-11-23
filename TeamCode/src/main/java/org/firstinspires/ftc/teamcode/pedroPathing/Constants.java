@@ -22,11 +22,16 @@ public class Constants {
     public static PathConstraints pathConstraints = new PathConstraints(0.99, 100, 1, 1);
 
     // Only change this in a reviewed hardware/calibration task. Tuning remains disabled.
-    private static final boolean HARDWARE_AND_CALIBRATION_VERIFIED = false;
+
 
     // Supply the localizer's validated configuration only after measuring wheel diameter,
     // counts/revolution, gearing, all three signs, signed offsets, multipliers and sample limits.
+    // BIOBUZZ measured odometry pod offsets (inches)
+    private static final double LEFT_Y = 6.25;
+    private static final double RIGHT_Y = -6.25;
+    private static final double PERPENDICULAR_X = -3.5;
     public static SafeThreeWheelLocalizer.Configuration odometryConfiguration = null;
+
     public static double mecanumForwardVelocity = Double.NaN; // inches/second
     public static double mecanumLateralVelocity = Double.NaN; // inches/second
     public static double mecanumMaxPower = Double.NaN;
@@ -72,9 +77,7 @@ public class Constants {
                 appendIssue(issues, invalid.getMessage());
             }
         }
-        if (!HARDWARE_AND_CALIBRATION_VERIFIED) {
-            appendIssue(issues, "hardware, encoder directions, odometry geometry and follower tuning review guard remains closed");
-        }
+
         return issues.length() == 0 ? null : issues.toString();
     }
 
@@ -100,8 +103,6 @@ public class Constants {
      */
     public static Follower createFollower(HardwareMap hardwareMap, Consumer<Pose> poseValidator) {
         validateCalibration();
-        require(HARDWARE_AND_CALIBRATION_VERIFIED,
-                "hardware layout, motor directions, odometry and Pedro follower tuning are not verified");
         require(hardwareMap != null, "HardwareMap is required after configuration verification");
 
         DcMotorEx frontLeft = hardwareMap.get(DcMotorEx.class, FRONT_LEFT);

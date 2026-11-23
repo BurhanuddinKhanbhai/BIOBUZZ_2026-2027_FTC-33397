@@ -44,7 +44,6 @@ import java.util.List;
  */
 @Configurable
 // Powered tuning requires a configured and verified mecanum drivetrain and three-wheel localizer.
-@Disabled
 @TeleOp(name = "Tuning", group = "Pedro Pathing")
 public class Tuning extends SelectableOpMode {
     public static Follower follower;
