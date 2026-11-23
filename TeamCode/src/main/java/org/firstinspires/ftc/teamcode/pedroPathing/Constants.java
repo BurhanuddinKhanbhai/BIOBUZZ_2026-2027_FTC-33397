@@ -36,7 +36,7 @@ public class Constants {
                     35.0 / 25.4,  // Wheel diameter in inches
                     1.0,          // Gear ratio
 
-                    1, 1, 1,      // Left, right, perpendicular encoder directions
+                    -1, 1, -1,      // Left, right, perpendicular encoder directions
 
                     LEFT_Y,
                     RIGHT_Y,
@@ -50,7 +50,7 @@ public class Constants {
 
     public static double mecanumForwardVelocity = 81.34056;
     public static double mecanumLateralVelocity = 65.43028;
-    public static double mecanumMaxPower = 0.25;
+    public static double mecanumMaxPower = 1;
     public static double mecanumMotorCachingThreshold = 0.01;
 
     // These names must be assigned to the stated ports in the Robot Controller configuration.
@@ -58,7 +58,7 @@ public class Constants {
     private static final String BACK_LEFT = "backLeft";     // Expansion Hub (left), motor 1
     private static final String FRONT_RIGHT = "frontRight"; // Control Hub (right), motor/encoder 0
     private static final String BACK_RIGHT = "backRight";   // Control Hub (right), motor 1
-    private static final String PERPENDICULAR = "transfer"; // Expansion Hub (left), motor/encoder 3
+    private static final String PERPENDICULAR = "intake"; // Expansion Hub (left), motor/encoder 3
 
     /**
      * Read-only preflight for OpMode telemetry. Returns null only when configuration and
@@ -232,12 +232,12 @@ public class Constants {
         require(frontLeft.getController() != null && frontRight.getController() != null
                         && frontLeft.getController() != frontRight.getController()
                         && backLeft.getController() == frontLeft.getController()
-                        && perpendicular.getController() == frontLeft.getController()
+                        && perpendicular.getController() == frontRight.getController()
                         && backRight.getController() == frontRight.getController(),
                 "motor names do not match the planned two-hub grouping");
         require(frontLeft.getPortNumber() == 0 && backLeft.getPortNumber() == 1
                         && frontRight.getPortNumber() == 0 && backRight.getPortNumber() == 1
-                        && perpendicular.getPortNumber() == 3,
+                        && perpendicular.getPortNumber() == 2,
                 "expected left Expansion Hub frontLeft=0/backLeft=1/transfer=3; right Control Hub frontRight=0/backRight=1");
         for (DcMotorEx motor : new DcMotorEx[]{frontLeft, backLeft, frontRight, backRight, perpendicular}) {
             require(motor.getMode() == DcMotor.RunMode.RUN_WITHOUT_ENCODER,
