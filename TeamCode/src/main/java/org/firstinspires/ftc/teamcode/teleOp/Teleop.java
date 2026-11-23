@@ -126,8 +126,10 @@ public class Teleop extends OpMode {
         // Manual transfer can feed directly into the shooter; there is no readiness interlock.
         if (gamepad2.right_trigger > TRIGGER_THRESHOLD) {
             transfer.reverse();
-        } else if (gamepad2.b || gamepad2.x) {
+        } else if (gamepad2.b) {
             transfer.feed();
+        } else if (gamepad2.x) {
+            transfer.setPower(0.15);
         } else {
             transfer.stop();
         }
