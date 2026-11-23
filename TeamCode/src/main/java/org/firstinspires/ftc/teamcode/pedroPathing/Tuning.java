@@ -481,6 +481,8 @@ class LateralTuner extends OpMode {
     /** This initializes the PoseUpdater as well as the Panels telemetry. */
     @Override
     public void init_loop() {
+        Tuning.updateFollower();
+
         telemetryM.debug("Pull your robot to the right " + DISTANCE + " inches. Your strafe ticks to inches will be shown on the telemetry.");
         telemetryM.update(telemetry);
         drawCurrent();
