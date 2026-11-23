@@ -39,9 +39,9 @@ public class Teleop extends OpMode {
     private static final double NECTAR_ADJUSTMENT_POSITION = 0.0;
     private static final double ADJUSTMENT_SETTLING_SECONDS = .05;
     private static final Servo.Direction ADJUSTMENT_DIRECTION = Servo.Direction.FORWARD;
-    // Leave unset until safe flower travel positions have been measured on the mechanism.
-    private static final double FLOWER_RAISED_POSITION = 0.31;
-    private static final double FLOWER_LOWERED_POSITION = 0.83;
+    // Calibrated with servo 1 FORWARD and servo 2 REVERSE; do not invert these numbers.
+    private static final double FLOWER_RAISED_POSITION = 0.225;
+    private static final double FLOWER_LOWERED_POSITION = 0.48;
 
     // Flywheel speed selection is independent of Shooter's ball/servo selection modes.
     private enum FlywheelSpeedMode { AUTO, MANUAL }
@@ -53,7 +53,6 @@ public class Teleop extends OpMode {
     private BallColorSensor ballColorSensor;
     private ShootingCoordinator shootingCoordinator;
     private FlowerMechanism flowerMechanism;
-    private boolean flowerPositionsConfigured;
     private boolean previousDpadLeft;
     private boolean previousDpadRight;
     // Retains driver intent even when the optional servo cannot yet apply a manual mode.
@@ -204,14 +203,12 @@ public class Teleop extends OpMode {
     }
 
     private void initializeFlowerMechanism() {
-        flowerMechanism = hardwareMap.tryGet(Servo.class, "flowerServo") != null
-                ? new FlowerMechanism(hardwareMap) : null;
-        flowerPositionsConfigured = false;
-        if (flowerMechanism != null && isServoPositionConfigured(FLOWER_RAISED_POSITION)
-                && isServoPositionConfigured(FLOWER_LOWERED_POSITION)) {
-            // Configures presets only; the subsystem does not command a position here.
+        flowerMechanism = new FlowerMechanism(hardwareMap, Servo.Direction.FORWARD, Servo.Direction.REVERSE);
+        try {
+            // Presets only: INIT never commands a flower position, including with missing hardware.
             flowerMechanism.configurePositions(FLOWER_RAISED_POSITION, FLOWER_LOWERED_POSITION);
-            flowerPositionsConfigured = true;
+        } catch (IllegalArgumentException e) {
+            RobotLog.ee("Teleop", e, "Flower UP/DOWN calibration invalid; linked movement disabled");
         }
         previousDpadLeft = previousDpadRight = false;
     }
@@ -219,11 +216,16 @@ public class Teleop extends OpMode {
     private void updateFlowerMechanism() {
         boolean left = gamepad2.dpad_left;
         boolean right = gamepad2.dpad_right;
-        if (flowerMechanism != null && flowerPositionsConfigured) {
-            if (left && !previousDpadLeft && !right) {
-                flowerMechanism.lower();
-            } else if (right && !previousDpadRight && !left) {
-                flowerMechanism.raise();
+        if (flowerMechanism != null && flowerMechanism.isReady()) {
+            try {
+                if (left && !previousDpadLeft && !right) {
+                    flowerMechanism.lower();
+                } else if (right && !previousDpadRight && !left) {
+                    flowerMechanism.raise();
+                }
+            } catch (RuntimeException e) {
+                // Subsystem latches the fault and retains each successful commanded target.
+                RobotLog.ee("Teleop", e, "Flower command failed; linked movement disabled");
             }
         }
         // Consume both edges during a conflict; releasing one does not command the held one.
@@ -232,12 +234,18 @@ public class Teleop extends OpMode {
     }
 
     private void addFlowerTelemetry() {
-        telemetry.addData("Flower servo available", flowerMechanism != null);
-        telemetry.addData("Flower position calibration", flowerPositionsConfigured ? "CONFIGURED" : "UNCALIBRATED");
-        telemetry.addData("Flower commanded state", flowerMechanism == null ? "UNAVAILABLE" : flowerMechanism.getState());
-        double target = flowerMechanism == null ? Double.NaN : flowerMechanism.getTargetPosition();
-        // Last commanded target only; the positional servo provides no physical position feedback.
-        telemetry.addData("Flower commanded target", Double.isNaN(target) ? "UNCOMMANDED" : target);
+        telemetry.addData("Flower servo 1 mapped/status", "%s / %s",
+                flowerMechanism.isServo1Available(), flowerMechanism.getServo1Status());
+        telemetry.addData("Flower servo 2 mapped/status", "%s / %s",
+                flowerMechanism.isServo2Available(), flowerMechanism.getServo2Status());
+        telemetry.addData("Flower UP/DOWN calibration", flowerMechanism.getCalibrationStatus());
+        telemetry.addData("Flower linked movement enabled", flowerMechanism.isReady());
+        telemetry.addData("Flower commanded state", flowerMechanism.getState());
+        double target1 = flowerMechanism.getTargetPosition1();
+        double target2 = flowerMechanism.getTargetPosition2();
+        // Commanded targets only; neither servo supplies physical position feedback.
+        telemetry.addData("Flower 1 commanded target", Double.isNaN(target1) ? "UNCOMMANDED" : target1);
+        telemetry.addData("Flower 2 commanded target", Double.isNaN(target2) ? "UNCOMMANDED" : target2);
     }
 
     private void initializeBallSelection() {

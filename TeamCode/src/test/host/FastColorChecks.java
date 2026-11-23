@@ -4,6 +4,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.*;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.FastColorTest;
+import org.firstinspires.ftc.teamcode.subsystems.FlowerMechanism;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.teleOp.Teleop;
 
@@ -103,12 +104,20 @@ public final class FastColorChecks {
                 });
     }
     private static final class Adjustment {
-        int calls;
+        int calls, attempts, directionCalls, lastLoop;
+        boolean failPosition;
+        Servo.Direction direction;
         double position = Double.NaN;
         final Servo device = (Servo) Proxy.newProxyInstance(Servo.class.getClassLoader(), new Class<?>[]{Servo.class},
                 (proxy, method, args) -> {
-                    if (method.getName().equals("setDirection")) return null;
-                    if (method.getName().equals("setPosition")) { position = (double) args[0]; calls++; return null; }
+                    if (method.getName().equals("setDirection")) {
+                        direction = (Servo.Direction) args[0]; directionCalls++; return null;
+                    }
+                    if (method.getName().equals("setPosition")) {
+                        attempts++;
+                        if (failPosition) throw new IllegalStateException("simulated servo write failure");
+                        position = (double) args[0]; calls++; lastLoop = flowerLoopNumber; return null;
+                    }
                     throw new AssertionError("Unexpected servo operation: " + method.getName());
                 });
     }
@@ -128,6 +137,120 @@ public final class FastColorChecks {
         op.init(); op.start();
     }
     private static void rb(Teleop op) { op.gamepad2.right_bumper = true; op.loop(); op.gamepad2.right_bumper = false; op.loop(); }
+
+    private static int flowerLoopNumber;
+    private static void flowerLoop(Teleop op) { flowerLoopNumber++; op.loop(); }
+
+    private static void dualFlowerChecks(File directory) throws Exception {
+        Adjustment first = new Adjustment(), second = new Adjustment();
+        HardwareMap map = new HardwareMap(directory);
+        map.put("flowerServo", first.device); map.put("flowerServo2", second.device);
+        FlowerMechanism linked = new FlowerMechanism(map, Servo.Direction.FORWARD, Servo.Direction.REVERSE);
+        check(first.calls == 0 && second.calls == 0, "Linked constructor never commands positions");
+        check(first.direction == Servo.Direction.FORWARD && second.direction == Servo.Direction.REVERSE
+                && first.directionCalls == 1 && second.directionCalls == 1, "Servo directions applied exactly once");
+        check(linked.isServo1Available() && linked.isServo2Available(), "Both linked servos mapped");
+        check(Double.isNaN(linked.getTargetPosition1()) && Double.isNaN(linked.getTargetPosition2()), "Uncommanded targets are unknown");
+        badCalibration(linked::raise); badCalibration(linked::lower); badCalibration(() -> linked.setPosition(.5));
+        check(first.calls == 0 && second.calls == 0, "Uncalibrated linked commands never move either servo");
+        linked.configurePositions(.20, .70);
+        check(linked.arePositionsConfigured() && linked.isReady(), "Linked calibrated readiness");
+        check(first.calls == 0 && second.calls == 0, "Configuring endpoints does not move servos");
+        linked.raise(); near(first.position, .20); near(second.position, .20);
+        near(linked.getTargetPosition1(), .20); near(linked.getTargetPosition2(), .20); near(linked.getTargetPosition(), .20);
+        linked.lower(); near(first.position, .70); near(second.position, .70);
+        near(linked.getTargetPosition1(), .70); near(linked.getTargetPosition2(), .70);
+        check(first.directionCalls == 1 && second.directionCalls == 1, "Commands never reapply or invert directions");
+        for (double invalid : new double[]{Double.NaN, Double.POSITIVE_INFINITY, -.01, 1.01}) {
+            linked.configurePositions(.20, .70);
+            int calls1 = first.calls, calls2 = second.calls;
+            badCalibration(() -> linked.configurePositions(invalid, .70));
+            check(!linked.arePositionsConfigured() && !linked.isReady(), "Invalid replacement disarms prior valid calibration");
+            check(linked.getCalibrationStatus().contains("INVALID"), "Invalid calibration is reported");
+            badCalibration(linked::raise); badCalibration(linked::lower); badCalibration(() -> linked.setPosition(.20));
+            check(first.calls == calls1 && second.calls == calls2, "Invalid calibration blocks all linked movement");
+            linked.configurePositions(.20, .70);
+            badCalibration(() -> linked.configurePositions(.20, invalid));
+            check(!linked.isReady() && first.calls == calls1 && second.calls == calls2, "Invalid lowered endpoint also blocks linked movement");
+        }
+
+        // Separate hardware writes cannot be atomic: retain only successful targets and latch failures.
+        for (int failedSide = 0; failedSide < 2; failedSide++) {
+            Adjustment one = new Adjustment(), two = new Adjustment();
+            HardwareMap failureMap = new HardwareMap(directory);
+            failureMap.put("flowerServo", one.device); failureMap.put("flowerServo2", two.device);
+            FlowerMechanism faulty = new FlowerMechanism(failureMap, Servo.Direction.FORWARD, Servo.Direction.REVERSE);
+            faulty.configurePositions(.20, .70);
+            (failedSide == 0 ? one : two).failPosition = true;
+            badCalibration(faulty::lower);
+            check(!faulty.isReady() && faulty.getState().contains("FAILED"), "Hardware failure disables linked commands");
+            check((failedSide == 0 ? faulty.getServo1Status() : faulty.getServo2Status()).contains("FAILED"), "Failing side reported");
+            if (failedSide == 0) check(Double.isNaN(faulty.getTargetPosition1()) && two.attempts == 0, "First failure cannot command the second servo");
+            else near(faulty.getTargetPosition1(), .70);
+            check(Double.isNaN(faulty.getTargetPosition2()), "Failed second command never appears as successful target");
+            int writes = one.attempts + two.attempts;
+            faulty.configurePositions(.20, .70); badCalibration(faulty::raise);
+            check(one.attempts + two.attempts == writes, "Fault cannot auto-retry after reconfiguration");
+        }
+
+        // Production TeleOp: same-loop commands, rising edges, conflicts and independent controls.
+        first = new Adjustment(); second = new Adjustment();
+        Map<String, Motor> motors = new HashMap<>();
+        map = hardware(directory, null, new Adjustment(), motors);
+        map.put("flowerServo", first.device); map.put("flowerServo2", second.device);
+        Teleop op = new Teleop(); op.gamepad2.dpad_right = true;
+        initialize(op, map); flowerLoop(op);
+        check(first.calls == 0 && second.calls == 0, "No INIT/START movement or held-at-START action");
+        op.gamepad2.dpad_right = false; flowerLoop(op);
+        op.gamepad1.left_stick_y = -1; op.gamepad2.x = true; op.gamepad2.left_trigger = .3f;
+        op.gamepad2.dpad_right = true; flowerLoop(op);
+        near(first.position, .20); near(second.position, .20);
+        check(first.calls == 1 && second.calls == 1 && first.lastLoop == flowerLoopNumber
+                && second.lastLoop == flowerLoopNumber, "UP writes both targets in one control loop");
+        near(motors.get("frontLeft").power, 1); near(motors.get("frontRight").power, 1);
+        near(motors.get("intake").power, -1); near(motors.get("transfer").power, 1);
+        flowerLoop(op); check(first.calls == 1 && second.calls == 1, "Holding RIGHT sends no repeated command");
+        op.gamepad1.left_stick_y = 0; op.gamepad2.x = false; op.gamepad2.left_trigger = 0;
+        op.gamepad2.dpad_right = false; flowerLoop(op);
+        op.gamepad2.dpad_left = true; flowerLoop(op);
+        near(first.position, .70); near(second.position, .70);
+        check(first.calls == 2 && second.calls == 2 && first.lastLoop == flowerLoopNumber
+                && second.lastLoop == flowerLoopNumber, "DOWN writes both targets in one control loop");
+        flowerLoop(op); check(first.calls == 2 && second.calls == 2, "Holding LEFT sends no repeated command");
+        op.gamepad2.dpad_left = false; flowerLoop(op);
+        op.gamepad2.dpad_left = op.gamepad2.dpad_right = true; flowerLoop(op);
+        check(first.calls == 2 && second.calls == 2, "Conflicting directions are ignored");
+        op.gamepad2.dpad_left = false; flowerLoop(op);
+        check(first.calls == 2 && second.calls == 2, "Releasing conflict does not trigger held direction");
+        op.gamepad2.dpad_right = false; flowerLoop(op); op.gamepad2.dpad_right = true; flowerLoop(op);
+        check(first.calls == 3 && second.calls == 3, "New press after conflict works once");
+        check(first.direction == Servo.Direction.FORWARD && second.direction == Servo.Direction.REVERSE
+                && first.directionCalls == 1 && second.directionCalls == 1, "TeleOp reverses servo 2 exactly once");
+        FlowerMechanism live = (FlowerMechanism) field(op, "flowerMechanism");
+        badCalibration(() -> live.configurePositions(Double.NaN, .70));
+        op.gamepad2.dpad_right = false; flowerLoop(op); op.gamepad2.dpad_left = true; flowerLoop(op);
+        check(first.calls == 3 && second.calls == 3, "TeleOp consults current linked readiness after calibration is invalidated");
+        op.stop(); check(first.calls == 3 && second.calls == 3, "STOP never moves the flower arm");
+        for (Motor motor : motors.values()) { near(motor.power, 0); near(motor.velocity, 0); }
+
+        // Missing either side must never move the remaining side, while other controls work.
+        for (int absent = 0; absent < 3; absent++) {
+            first = new Adjustment(); second = new Adjustment(); motors = new HashMap<>();
+            map = hardware(directory, null, new Adjustment(), motors);
+            if (absent == 1) map.put("flowerServo", first.device);
+            if (absent == 0) map.put("flowerServo2", second.device);
+            op = new Teleop(); initialize(op, map);
+            FlowerMechanism missing = (FlowerMechanism) field(op, "flowerMechanism");
+            check(missing != null && !missing.isReady(), "Missing linked hardware remains explicitly unavailable");
+            check(missing.isServo1Available() == (absent == 1) && missing.isServo2Available() == (absent == 0), "Per-servo mapping telemetry");
+            check((absent == 1 ? missing.getServo2Status() : missing.getServo1Status()).contains("MISSING"), "Missing side status is explicit");
+            op.gamepad2.dpad_right = true; op.gamepad2.a = true; flowerLoop(op);
+            near(motors.get("intake").power, 1);
+            op.gamepad2.dpad_right = false; flowerLoop(op); op.gamepad2.dpad_left = true; flowerLoop(op);
+            check(first.calls == 0 && second.calls == 0, "Either missing servo blocks both directions");
+            op.stop();
+        }
+    }
 
     public static void main(String[] args) throws Exception {
         File directory = new File(args[0], "app-files"); check(directory.mkdir(), "Create app directory");
@@ -340,6 +463,7 @@ public final class FastColorChecks {
         color.rgb(.3f, .6f, .1f); test.loop(); test.loop(); near(adjustment.position, .30);
         color.rgb(.1f, .2f, .7f); test.loop(); test.loop(); near(adjustment.position, .02);
         check(new BallColorSensor(color.device, file).isRedCalibrated(), "Saved red reloads for competition");
+        dualFlowerChecks(directory);
         System.out.println("PASS: " + checks + " focused checks; no physical hardware or follower constructed.");
     }
 }

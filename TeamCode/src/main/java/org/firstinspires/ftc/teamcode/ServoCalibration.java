@@ -91,6 +91,7 @@ public class ServoCalibration extends OpMode {
 
     @Override
     public void start() {
+        if (flowerServo2 != null) flowerServo2.setDirection(Servo.Direction.REVERSE);
         // Require each enabled channel to have been observed OFF after START.
         flowerObservedDisabled = false;
         flower2ObservedDisabled = false;
