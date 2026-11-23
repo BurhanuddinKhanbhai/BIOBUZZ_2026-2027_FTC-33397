@@ -30,7 +30,23 @@ public class Constants {
     private static final double LEFT_Y = 6.25;
     private static final double RIGHT_Y = -6.25;
     private static final double PERPENDICULAR_X = -3.5;
-    public static SafeThreeWheelLocalizer.Configuration odometryConfiguration = null;
+    public static SafeThreeWheelLocalizer.Configuration odometryConfiguration =
+            new SafeThreeWheelLocalizer.Configuration(
+                    8192.0,       // Encoder ticks per revolution
+                    35.0 / 25.4,  // Wheel diameter in inches
+                    1.0,          // Gear ratio
+
+                    1, 1, 1,      // Left, right, perpendicular encoder directions
+
+                    LEFT_Y,
+                    RIGHT_Y,
+                    PERPENDICULAR_X,
+
+                    1.0, 1.0, 1.0,  // Initial distance correction multipliers
+
+                    100000.0,     // Provisional maximum encoder ticks/sec
+                    0.5           // Maximum sampling interval in seconds
+            );
 
     public static double mecanumForwardVelocity = Double.NaN; // inches/second
     public static double mecanumLateralVelocity = Double.NaN; // inches/second
