@@ -35,7 +35,7 @@ public class Teleop extends OpMode {
     private static final double FLYWHEEL_STABLE_TIME_SECONDS = 0.25;
 
     // Unset until measured on the robot. NaN is never passed as a servo command or timing value.
-    private static final double POLLEN_ADJUSTMENT_POSITION = 0.21;
+    private static final double POLLEN_ADJUSTMENT_POSITION = 0.1;
     private static final double NECTAR_ADJUSTMENT_POSITION = 0.0;
     private static final double ADJUSTMENT_SETTLING_SECONDS = .05;
     private static final Servo.Direction ADJUSTMENT_DIRECTION = Servo.Direction.FORWARD;
@@ -124,15 +124,35 @@ public class Teleop extends OpMode {
         }
 
         // Manual transfer can feed directly into the shooter; there is no readiness interlock.
+
+// Intake and transfer controls
+// Right trigger takes priority over all forward commands.
+
         if (gamepad2.right_trigger > TRIGGER_THRESHOLD) {
-            transfer.reverse();
+            // Outtake: both motors reverse at 50%
+            intake.setPower(-0.50);
+            transfer.setPower(-0.50);
+
+        } else if (gamepad2.a) {
+            // Intake at 100%, transfer at 90%
+            intake.setPower(1.00);
+            transfer.setPower(0.90);
+
         } else if (gamepad2.b) {
-            transfer.feed();
+            // Intake only at 100%
+            intake.setPower(1.00);
+            transfer.stop();
+
         } else if (gamepad2.x) {
+            // Intake at 100%, transfer at 15%
+            intake.setPower(1.00);
             transfer.setPower(0.15);
+
         } else {
+            intake.stop();
             transfer.stop();
         }
+
 
         double flywheelTargetVelocity = updateFlywheels();
         updateBallSelectionMode();
