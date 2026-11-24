@@ -108,13 +108,45 @@ public class RedAuto extends OpMode {
             long now = clock.getAsLong();
             follower.update();
             color.update();
-            if (RedAutoPlan.isDrive(step) || RedAutoPlan.isTurn(step)) {
-                if (!follower.isBusy()) {
-                    // A completed Pedro turn retains a powered hold until explicitly cancelled.
+
+            if (RedAutoPlan.isTurn(step)) {
+
+                // Calculate how far the robot is from its target heading.
+                double headingError = Math.atan2(
+                        Math.sin(target.getHeading() - follower.getPose().getHeading()),
+                        Math.cos(target.getHeading() - follower.getPose().getHeading())
+                );
+
+                // Finish the turn once it is within 5 degrees.
+                if (Math.abs(headingError) <= settings.headingTolerance) {
+                    follower.breakFollowing();
+                    driveTrain.stop();
+                    advance(now);
+                }
+
+
+
+            } else if (RedAutoPlan.isDrive(step)) {
+
+                double distanceToTarget = Math.hypot(
+                        target.getX() - follower.getPose().getX(),
+                        target.getY() - follower.getPose().getY()
+                );
+
+                double tolerance = (
+                        step == RedAutoPlan.Step.INTAKE_1
+                                || step == RedAutoPlan.Step.INTAKE_2
+                                || step == RedAutoPlan.Step.RETURN_1
+                ) ? 4.0 : settings.positionTolerance;
+
+                if (distanceToTarget <= tolerance) {
                     follower.breakFollowing();
                     advance(now);
                 }
-            } else if (RedAutoPlan.isShoot(step)) {
+            }
+
+
+            else if (RedAutoPlan.isShoot(step)) {
                 updateShooting(now);
             } else if (elapsed(now, stepStarted) >= settings.flowerSettlingSeconds) {
                 advance(now);
@@ -140,16 +172,27 @@ public class RedAuto extends OpMode {
             shooter.setAutoMode();
             feedingBall = BallColorSensor.BallType.UNKNOWN;
             feedStatus = "WAITING FOR SPEED / BALL / SERVO";
+
         } else if (RedAutoPlan.isDrive(step)) {
-            Pose from = plan.getTarget(RedAutoPlan.Step.values()[step.ordinal() - 1]);
-            activePath = new Path(new BezierLine(from, target), new PathConstraints(
-                    0.995, settings.stoppedSpeed, settings.positionTolerance, settings.headingTolerance,
-                    settings.endpointTimeoutMs, Constants.pathConstraints.getBrakingStrength(),
-                    Constants.pathConstraints.getBEZIER_CURVE_SEARCH_LIMIT(), Constants.pathConstraints.getBrakingStart()));
-            activePath.setConstantHeadingInterpolation(target.getHeading());
-            follower.setMaxPower(Math.min(settings.pathPower, Constants.mecanumMaxPower));
-            follower.followPath(activePath, false);
-        } else if (RedAutoPlan.isTurn(step)) {
+
+            double distanceToTarget = Math.hypot(
+                    target.getX() - follower.getPose().getX(),
+                    target.getY() - follower.getPose().getY()
+            );
+
+            boolean useFourInchTolerance =
+                    step == RedAutoPlan.Step.INTAKE_1
+                            || step == RedAutoPlan.Step.INTAKE_2
+                            || step == RedAutoPlan.Step.RETURN_1;
+
+            if ((useFourInchTolerance && distanceToTarget <= 4.0)
+                    || !follower.isBusy()) {
+
+                follower.breakFollowing();
+                advance(now);
+            }
+        }
+        else if (RedAutoPlan.isTurn(step)) {
             follower.setMaxPower(Math.min(settings.pathPower, Constants.mecanumMaxPower));
             double rotation = RedAutoPlan.turnRadians(step) > 0.0
                     ? positiveAngle(target.getHeading() - follower.getPose().getHeading())
