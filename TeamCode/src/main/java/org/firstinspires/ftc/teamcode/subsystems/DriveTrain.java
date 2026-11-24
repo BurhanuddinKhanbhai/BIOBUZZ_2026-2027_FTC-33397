@@ -21,7 +21,7 @@ public class DriveTrain {
     private double backRightPower;
 
     /**
-     * Assumes mirrored mounting: left motors REVERSE, right motors FORWARD.
+     * Uses the current mounting directions: left FORWARD, right REVERSE.
      * Uses BRAKE and full speed scaling. Belt routing may require direction overrides.
      */
     public DriveTrain(HardwareMap hardwareMap) {
@@ -43,11 +43,6 @@ public class DriveTrain {
                       DcMotorSimple.Direction backLeftDirection,
                       DcMotorSimple.Direction backRightDirection,
                       DcMotor.ZeroPowerBehavior zeroPowerBehavior) {
-        if (hardwareMap == null || frontLeftDirection == null || frontRightDirection == null
-                || backLeftDirection == null || backRightDirection == null) {
-            throw new IllegalArgumentException("Hardware map and motor directions must not be null");
-        }
-        validateZeroPowerBehavior(zeroPowerBehavior);
         frontLeft = initializeMotor(hardwareMap, "frontLeft", frontLeftDirection, zeroPowerBehavior);
         frontRight = initializeMotor(hardwareMap, "frontRight", frontRightDirection, zeroPowerBehavior);
         backLeft = initializeMotor(hardwareMap, "backLeft", backLeftDirection, zeroPowerBehavior);
@@ -59,18 +54,9 @@ public class DriveTrain {
     /**
      * Positive forward moves toward the robot's front, positive strafe moves right,
      * and positive turn rotates clockwise when viewed from above.
-     * Finite inputs are clipped to [-1.0, 1.0] before mixing. Any nonfinite input stops
-     * all motors and returns. Wheel powers are normalized together, then speed-scaled.
+     * Wheel powers are normalized together, then speed-scaled.
      */
     public void drive(double forward, double strafe, double turn) {
-        if (!isFinite(forward) || !isFinite(strafe) || !isFinite(turn)) {
-            stop();
-            return;
-        }
-        forward = Math.max(-1.0, Math.min(1.0, forward));
-        strafe = Math.max(-1.0, Math.min(1.0, strafe));
-        turn = Math.max(-1.0, Math.min(1.0, turn));
-
         double fl = forward + strafe + turn;
         double fr = forward - strafe - turn;
         double bl = forward - strafe + turn;
@@ -110,15 +96,8 @@ public class DriveTrain {
         }
     }
 
-    /**
-     * Sets scaling for subsequent drive() calls, from 0.0 to 1.0.
-     * Invalid values stop the drivetrain and throw IllegalArgumentException.
-     */
+    /** Sets scaling for subsequent drive() calls. */
     public void setSpeedScale(double speedScale) {
-        if (!isFinite(speedScale) || speedScale < 0.0 || speedScale > 1.0) {
-            stop();
-            throw new IllegalArgumentException("Drive speed scale must be between 0.0 and 1.0");
-        }
         this.speedScale = speedScale;
     }
 
@@ -128,7 +107,6 @@ public class DriveTrain {
 
     /** Applies BRAKE or FLOAT to all motors without changing encoder configuration. */
     public void setZeroPowerBehavior(DcMotor.ZeroPowerBehavior zeroPowerBehavior) {
-        validateZeroPowerBehavior(zeroPowerBehavior);
         frontLeft.setZeroPowerBehavior(zeroPowerBehavior);
         frontRight.setZeroPowerBehavior(zeroPowerBehavior);
         backLeft.setZeroPowerBehavior(zeroPowerBehavior);
@@ -189,13 +167,4 @@ public class DriveTrain {
         return motor;
     }
 
-    private static void validateZeroPowerBehavior(DcMotor.ZeroPowerBehavior behavior) {
-        if (behavior != DcMotor.ZeroPowerBehavior.BRAKE && behavior != DcMotor.ZeroPowerBehavior.FLOAT) {
-            throw new IllegalArgumentException("Drive zero-power behavior must be BRAKE or FLOAT");
-        }
-    }
-
-    private static boolean isFinite(double value) {
-        return !Double.isNaN(value) && !Double.isInfinite(value);
-    }
 }

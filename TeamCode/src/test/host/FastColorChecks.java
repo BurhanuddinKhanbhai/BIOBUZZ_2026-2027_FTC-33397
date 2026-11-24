@@ -4,6 +4,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.*;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.FastColorTest;
+import org.firstinspires.ftc.teamcode.ServoCalibration;
 import org.firstinspires.ftc.teamcode.subsystems.FlowerMechanism;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.teleOp.Teleop;
@@ -62,10 +63,10 @@ public final class FastColorChecks {
     private static BallColorCalibration.Reference reference(double r, double g, double b, double d) {
         return new BallColorCalibration.Reference(r, g, b, d, 12, Double.isNaN(d) ? 0 : 12);
     }
-    private static void badCalibration(Runnable operation) {
+    private static void expectFailure(Runnable operation) {
         boolean rejected = false;
         try { operation.run(); } catch (IllegalArgumentException | IllegalStateException expected) { rejected = true; }
-        check(rejected, "Invalid calibration accepted");
+        check(rejected, "Expected argument/state failure");
     }
     private static final class Color {
         float r = .3f, g = .6f, b = .1f;
@@ -125,6 +126,8 @@ public final class FastColorChecks {
         HardwareMap map = new HardwareMap(directory);
         if (color != null) map.put("ballColor", color.device);
         map.put("shooterAdjust", adjustment.device);
+        map.put("flowerServo", new Adjustment().device);
+        map.put("flowerServo2", new Adjustment().device);
         for (String name : new String[]{"frontLeft", "frontRight", "backLeft", "backRight", "intake", "transfer", "flywheelA", "flywheelB"}) {
             Motor motor = new Motor(); motors.put(name, motor); map.put(name, motor.device);
         }
@@ -151,30 +154,22 @@ public final class FastColorChecks {
                 && first.directionCalls == 1 && second.directionCalls == 1, "Servo directions applied exactly once");
         check(linked.isServo1Available() && linked.isServo2Available(), "Both linked servos mapped");
         check(Double.isNaN(linked.getTargetPosition1()) && Double.isNaN(linked.getTargetPosition2()), "Uncommanded targets are unknown");
-        badCalibration(linked::raise); badCalibration(linked::lower); badCalibration(() -> linked.setPosition(.5));
-        check(first.calls == 0 && second.calls == 0, "Uncalibrated linked commands never move either servo");
+        linked.raise(); linked.lower();
+        check(first.calls == 0 && second.calls == 0, "Unset endpoints do not invent a target");
+        linked.setPosition(.4);
+        near(first.position, .4); near(second.position, .4);
+        check(!linked.arePositionsConfigured(), "Direct target needs no calibration arming step");
+        int directCalls = first.calls;
         linked.configurePositions(.20, .70);
-        check(linked.arePositionsConfigured() && linked.isReady(), "Linked calibrated readiness");
-        check(first.calls == 0 && second.calls == 0, "Configuring endpoints does not move servos");
+        check(linked.arePositionsConfigured() && linked.isReady(), "Configured endpoints available");
+        check(first.calls == directCalls && second.calls == directCalls, "Configuring endpoints does not move servos");
         linked.raise(); near(first.position, .20); near(second.position, .20);
         near(linked.getTargetPosition1(), .20); near(linked.getTargetPosition2(), .20); near(linked.getTargetPosition(), .20);
         linked.lower(); near(first.position, .70); near(second.position, .70);
         near(linked.getTargetPosition1(), .70); near(linked.getTargetPosition2(), .70);
         check(first.directionCalls == 1 && second.directionCalls == 1, "Commands never reapply or invert directions");
-        for (double invalid : new double[]{Double.NaN, Double.POSITIVE_INFINITY, -.01, 1.01}) {
-            linked.configurePositions(.20, .70);
-            int calls1 = first.calls, calls2 = second.calls;
-            badCalibration(() -> linked.configurePositions(invalid, .70));
-            check(!linked.arePositionsConfigured() && !linked.isReady(), "Invalid replacement disarms prior valid calibration");
-            check(linked.getCalibrationStatus().contains("INVALID"), "Invalid calibration is reported");
-            badCalibration(linked::raise); badCalibration(linked::lower); badCalibration(() -> linked.setPosition(.20));
-            check(first.calls == calls1 && second.calls == calls2, "Invalid calibration blocks all linked movement");
-            linked.configurePositions(.20, .70);
-            badCalibration(() -> linked.configurePositions(.20, invalid));
-            check(!linked.isReady() && first.calls == calls1 && second.calls == calls2, "Invalid lowered endpoint also blocks linked movement");
-        }
 
-        // Separate hardware writes cannot be atomic: retain only successful targets and latch failures.
+        // A failed SDK write propagates and does not create a custom latch requiring re-arming.
         for (int failedSide = 0; failedSide < 2; failedSide++) {
             Adjustment one = new Adjustment(), two = new Adjustment();
             HardwareMap failureMap = new HardwareMap(directory);
@@ -182,15 +177,14 @@ public final class FastColorChecks {
             FlowerMechanism faulty = new FlowerMechanism(failureMap, Servo.Direction.FORWARD, Servo.Direction.REVERSE);
             faulty.configurePositions(.20, .70);
             (failedSide == 0 ? one : two).failPosition = true;
-            badCalibration(faulty::lower);
-            check(!faulty.isReady() && faulty.getState().contains("FAILED"), "Hardware failure disables linked commands");
-            check((failedSide == 0 ? faulty.getServo1Status() : faulty.getServo2Status()).contains("FAILED"), "Failing side reported");
-            if (failedSide == 0) check(Double.isNaN(faulty.getTargetPosition1()) && two.attempts == 0, "First failure cannot command the second servo");
+            expectFailure(faulty::lower);
+            if (failedSide == 0) check(Double.isNaN(faulty.getTargetPosition1()) && two.attempts == 0, "First SDK failure propagates before the second write");
             else near(faulty.getTargetPosition1(), .70);
-            check(Double.isNaN(faulty.getTargetPosition2()), "Failed second command never appears as successful target");
-            int writes = one.attempts + two.attempts;
-            faulty.configurePositions(.20, .70); badCalibration(faulty::raise);
-            check(one.attempts + two.attempts == writes, "Fault cannot auto-retry after reconfiguration");
+            check(Double.isNaN(faulty.getTargetPosition2()), "Failed write never appears as successful target");
+            one.failPosition = two.failPosition = false;
+            faulty.raise();
+            near(one.position, .20); near(two.position, .20);
+            check(faulty.getState().equals("RAISE_COMMANDED"), "Next explicit command needs no fault reset");
         }
 
         // Production TeleOp: same-loop commands, rising edges, conflicts and independent controls.
@@ -204,16 +198,16 @@ public final class FastColorChecks {
         op.gamepad2.dpad_right = false; flowerLoop(op);
         op.gamepad1.left_stick_y = -1; op.gamepad2.x = true; op.gamepad2.left_trigger = .3f;
         op.gamepad2.dpad_right = true; flowerLoop(op);
-        near(first.position, .20); near(second.position, .20);
+        near(first.position, .225); near(second.position, .225);
         check(first.calls == 1 && second.calls == 1 && first.lastLoop == flowerLoopNumber
                 && second.lastLoop == flowerLoopNumber, "UP writes both targets in one control loop");
         near(motors.get("frontLeft").power, 1); near(motors.get("frontRight").power, 1);
-        near(motors.get("intake").power, -1); near(motors.get("transfer").power, 1);
+        near(motors.get("intake").power, 1); near(motors.get("transfer").power, .15);
         flowerLoop(op); check(first.calls == 1 && second.calls == 1, "Holding RIGHT sends no repeated command");
         op.gamepad1.left_stick_y = 0; op.gamepad2.x = false; op.gamepad2.left_trigger = 0;
         op.gamepad2.dpad_right = false; flowerLoop(op);
         op.gamepad2.dpad_left = true; flowerLoop(op);
-        near(first.position, .70); near(second.position, .70);
+        near(first.position, .48); near(second.position, .48);
         check(first.calls == 2 && second.calls == 2 && first.lastLoop == flowerLoopNumber
                 && second.lastLoop == flowerLoopNumber, "DOWN writes both targets in one control loop");
         flowerLoop(op); check(first.calls == 2 && second.calls == 2, "Holding LEFT sends no repeated command");
@@ -226,30 +220,99 @@ public final class FastColorChecks {
         check(first.calls == 3 && second.calls == 3, "New press after conflict works once");
         check(first.direction == Servo.Direction.FORWARD && second.direction == Servo.Direction.REVERSE
                 && first.directionCalls == 1 && second.directionCalls == 1, "TeleOp reverses servo 2 exactly once");
-        FlowerMechanism live = (FlowerMechanism) field(op, "flowerMechanism");
-        badCalibration(() -> live.configurePositions(Double.NaN, .70));
-        op.gamepad2.dpad_right = false; flowerLoop(op); op.gamepad2.dpad_left = true; flowerLoop(op);
-        check(first.calls == 3 && second.calls == 3, "TeleOp consults current linked readiness after calibration is invalidated");
         op.stop(); check(first.calls == 3 && second.calls == 3, "STOP never moves the flower arm");
         for (Motor motor : motors.values()) { near(motor.power, 0); near(motor.velocity, 0); }
 
-        // Missing either side must never move the remaining side, while other controls work.
-        for (int absent = 0; absent < 3; absent++) {
-            first = new Adjustment(); second = new Adjustment(); motors = new HashMap<>();
-            map = hardware(directory, null, new Adjustment(), motors);
-            if (absent == 1) map.put("flowerServo", first.device);
-            if (absent == 0) map.put("flowerServo2", second.device);
-            op = new Teleop(); initialize(op, map);
-            FlowerMechanism missing = (FlowerMechanism) field(op, "flowerMechanism");
-            check(missing != null && !missing.isReady(), "Missing linked hardware remains explicitly unavailable");
-            check(missing.isServo1Available() == (absent == 1) && missing.isServo2Available() == (absent == 0), "Per-servo mapping telemetry");
-            check((absent == 1 ? missing.getServo2Status() : missing.getServo1Status()).contains("MISSING"), "Missing side status is explicit");
-            op.gamepad2.dpad_right = true; op.gamepad2.a = true; flowerLoop(op);
-            near(motors.get("intake").power, 1);
-            op.gamepad2.dpad_right = false; flowerLoop(op); op.gamepad2.dpad_left = true; flowerLoop(op);
-            check(first.calls == 0 && second.calls == 0, "Either missing servo blocks both directions");
-            op.stop();
+        // Required linked hardware is resolved through the SDK's normal initialization error.
+        for (String absent : new String[]{"flowerServo", "flowerServo2"}) {
+            HardwareMap missingMap = hardware(directory, null, new Adjustment(), new HashMap<>());
+            missingMap.put(absent, null);
+            expectFailure(() -> initialize(new Teleop(), missingMap));
         }
+    }
+
+    private static void servoCalibrationChecks(File directory) {
+        Adjustment first = new Adjustment(), second = new Adjustment(), shooter = new Adjustment();
+        HardwareMap map = new HardwareMap(directory);
+        map.put("flowerServo", first.device); map.put("flowerServo2", second.device);
+        map.put("shooterAdjust", shooter.device);
+        ServoCalibration.flowerPosition = .20;
+        ServoCalibration.flower2Position = .20;
+        ServoCalibration.shooterPosition = .30;
+        ServoCalibration.flowerEnabled = ServoCalibration.flower2Enabled = ServoCalibration.shooterEnabled = true;
+        ServoCalibration op = new ServoCalibration();
+        initialize(op, map);
+        check(first.calls == 0 && second.calls == 0 && shooter.calls == 0, "Calibration INIT/START sends no position commands");
+        check(second.direction == Servo.Direction.REVERSE && second.directionCalls == 1, "Calibration reverses servo 2 once");
+        op.loop();
+        near(first.position, .20); near(second.position, .20); near(shooter.position, .30);
+        check(first.calls == 1 && second.calls == 1 && shooter.calls == 1, "Enabled targets apply without OFF-ON arming");
+        op.loop(); check(first.calls == 1 && second.calls == 1 && shooter.calls == 1, "Unchanged targets are not rewritten");
+        ServoCalibration.flowerPosition = ServoCalibration.flower2Position = .70;
+        ServoCalibration.shooterPosition = .02;
+        op.loop();
+        near(first.position, .70); near(second.position, .70); near(shooter.position, .02);
+        check(first.calls == 2 && second.calls == 2 && shooter.calls == 2, "Full target change applies in one loop without rate limiting");
+        ServoCalibration.flowerEnabled = false; ServoCalibration.flowerPosition = .30;
+        op.loop(); near(first.position, .70);
+        ServoCalibration.flowerEnabled = true; op.loop(); near(first.position, .30);
+        int total = first.calls + second.calls + shooter.calls;
+        op.stop();
+        check(!ServoCalibration.flowerEnabled && !ServoCalibration.flower2Enabled && !ServoCalibration.shooterEnabled,
+                "STOP clears normal enable controls");
+        check(total == first.calls + second.calls + shooter.calls, "STOP sends no servo position");
+        // Restore UI defaults after host fixtures.
+        ServoCalibration.flowerPosition = ServoCalibration.flower2Position = ServoCalibration.shooterPosition = .50;
+    }
+
+    private static void competitionControlChecks(File directory) throws Exception {
+        Map<String, Motor> motors = new HashMap<>();
+        Teleop op = new Teleop();
+        initialize(op, hardware(directory, null, new Adjustment(), motors));
+        // Exhaust the effective local hold-control combinations, including LT's unchanged no-op.
+        for (int combination = 0; combination < 32; combination++) {
+            op.gamepad2.a = (combination & 1) != 0;
+            op.gamepad2.b = (combination & 2) != 0;
+            op.gamepad2.x = (combination & 4) != 0;
+            op.gamepad2.left_trigger = (combination & 8) != 0 ? .3f : 0;
+            op.gamepad2.right_trigger = (combination & 16) != 0 ? .3f : 0;
+            op.loop();
+            double intake = op.gamepad2.right_trigger > .2 ? -.50
+                    : op.gamepad2.a || op.gamepad2.b || op.gamepad2.x ? 1 : 0;
+            double transfer = op.gamepad2.right_trigger > .2 ? -.50
+                    : op.gamepad2.a ? .90 : op.gamepad2.b ? 0 : op.gamepad2.x ? .15 : 0;
+            near(motors.get("intake").power, intake); near(motors.get("transfer").power, transfer);
+        }
+        op.gamepad2.a = op.gamepad2.b = op.gamepad2.x = false;
+        op.gamepad2.left_trigger = op.gamepad2.right_trigger = 0;
+        op.gamepad1.left_stick_y = -.01f; op.loop();
+        near(motors.get("frontLeft").power, 0);
+        op.gamepad1.left_stick_y = -1; op.gamepad1.right_bumper = true; op.loop();
+        near(motors.get("frontLeft").power, 1); near(motors.get("frontRight").power, 1);
+        op.gamepad1.left_bumper = true; op.loop();
+        near(motors.get("frontLeft").power, .6); near(motors.get("frontRight").power, .6);
+        op.gamepad1.left_stick_x = op.gamepad1.right_stick_x = 1; op.loop();
+        for (String name : new String[]{"frontLeft", "frontRight", "backLeft", "backRight"}) {
+            check(Math.abs(motors.get(name).power) <= .6, "Mecanum normalization and precision scale retained");
+        }
+        op.stop();
+        for (Motor motor : motors.values()) { near(motor.power, 0); near(motor.velocity, 0); }
+
+        // Optional adjustment hardware still permits flywheel-only controls and manual intent.
+        motors = new HashMap<>();
+        HardwareMap map = hardware(directory, null, new Adjustment(), motors);
+        map.put("shooterAdjust", null);
+        op = new Teleop(); initialize(op, map); rb(op);
+        Shooter shooter = (Shooter) field(op, "shooter");
+        check(shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_POLLEN
+                && shooter.getSelectedBallType() == Shooter.BallType.UNKNOWN, "Missing optional servo keeps manual intent without false applied target");
+        op.gamepad2.y = op.gamepad2.left_bumper = op.gamepad2.dpad_up = true; op.loop();
+        near(motors.get("flywheelA").velocity, 50); near(motors.get("flywheelB").velocity, 50);
+        op.gamepad2.y = op.gamepad2.left_bumper = op.gamepad2.dpad_up = false; op.loop();
+        op.gamepad2.left_bumper = true; op.loop();
+        near(motors.get("flywheelA").velocity, 0); near(motors.get("flywheelB").velocity, 0);
+        check(!shooter.isReadyToFeed(), "AUTO speed has no invented target and missing servo cannot report feed ready");
+        op.stop();
     }
 
     public static void main(String[] args) throws Exception {
@@ -330,13 +393,13 @@ public final class FastColorChecks {
         dark.add(.2, .3, .5, 10); // Mixed dark and lit EMPTY is valid even with fraction sum < 1.
         new BallColorCalibration(dark.average(), calibration().pollen, calibration().nectar).save(file);
         near(BallColorCalibration.load(file).empty.red, .2 / 13);
-        badCalibration(() -> new BallColorCalibration.Samples().average());
-        badCalibration(() -> new BallColorCalibration(reference(0, 0, 0, 12), reference(0, 0, 0, 3), calibration().nectar));
-        badCalibration(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().pollen));
-        badCalibration(() -> new BallColorCalibration(reference(Double.NaN, 0, 0, 12), calibration().pollen, calibration().nectar));
-        badCalibration(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().nectar,
+        expectFailure(() -> new BallColorCalibration.Samples().average());
+        expectFailure(() -> new BallColorCalibration(reference(0, 0, 0, 12), reference(0, 0, 0, 3), calibration().nectar));
+        expectFailure(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().pollen));
+        expectFailure(() -> new BallColorCalibration(reference(Double.NaN, 0, 0, 12), calibration().pollen, calibration().nectar));
+        expectFailure(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().nectar,
                 new BallColorCalibration.Reference(.75, .15, .1, 4, 11, 11)));
-        badCalibration(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().nectar,
+        expectFailure(() -> new BallColorCalibration(calibration().empty, calibration().pollen, calibration().nectar,
                 calibration().pollen));
         withRed().save(file);
         byte[] redSaved = Files.readAllBytes(file.toPath());
@@ -379,29 +442,30 @@ public final class FastColorChecks {
         Teleop op = new Teleop(); initialize(op, hardware(directory, color, adjustment, motors));
         check(adjustment.calls == 0, "No init servo movement");
         reads = color.reads; op.loop(); check(adjustment.calls == 0 && color.reads == reads + 1, "One coordinator update");
-        op.loop(); near(adjustment.position, .21);
+        op.loop(); near(adjustment.position, .10);
         Shooter shooter = (Shooter) field(op, "shooter");
         long commandTime = (long) field(shooter, "adjustmentCommandNanos");
         op.loop(); check(adjustment.calls == 1 && (long) field(shooter, "adjustmentCommandNanos") == commandTime, "No repeated command/timer restart");
         shooter.setAdjustmentSettlingSeconds(3600); // A long test interval must not delay physical commands.
-        color.rgb(.1f, .2f, .7f); op.loop(); near(adjustment.position, .21); op.loop(); near(adjustment.position, .00);
+        color.rgb(.1f, .2f, .7f); op.loop(); near(adjustment.position, .10); op.loop(); near(adjustment.position, .00);
         check(!shooter.isAdjustmentSettled(), "Settling independent of servo command");
         int nectarCommands = adjustment.calls;
         commandTime = (long) field(shooter, "adjustmentCommandNanos");
         color.rgb(.75f, .15f, .10f); op.loop(); op.loop(); near(adjustment.position, .00);
         check(shooter.getSelectedBallType() == Shooter.BallType.NECTAR && adjustment.calls == nectarCommands
                 && (long) field(shooter, "adjustmentCommandNanos") == commandTime, "Red selects same nectar preset without re-command or timer restart");
-        color.rgb(.3f, .6f, .1f); op.loop(); op.loop(); near(adjustment.position, .21);
-        color.rgb(.75f, .15f, .10f); op.loop(); near(adjustment.position, .21); op.loop(); near(adjustment.position, .00);
-        rb(op); near(adjustment.position, .21); check(shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_POLLEN, "Manual pollen ignores red");
+        color.rgb(.3f, .6f, .1f); op.loop(); op.loop(); near(adjustment.position, .10);
+        color.rgb(.75f, .15f, .10f); op.loop(); near(adjustment.position, .10); op.loop(); near(adjustment.position, .00);
+        rb(op); near(adjustment.position, .10); check(shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_POLLEN, "Manual pollen ignores red");
         op.gamepad2.right_bumper = true; op.loop(); int commanded = adjustment.calls; op.loop();
         check(adjustment.calls == commanded && shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_NECTAR, "RB hold cycles once");
         op.gamepad2.right_bumper = false; op.loop(); color.failed = true; rb(op);
         check(shooter.getSelectedBallType() == Shooter.BallType.UNKNOWN && !shooter.isReadyToFeed(), "AUTO disconnected cannot retain manual identification");
         color.failed = false;
         op.gamepad2.x = true; op.gamepad2.left_trigger = .3f; op.loop();
-        near(motors.get("intake").power, -1); near(motors.get("transfer").power, 1);
-        op.gamepad2.right_trigger = .3f; op.loop(); near(motors.get("transfer").power, -1);
+        near(motors.get("intake").power, 1); near(motors.get("transfer").power, .15);
+        op.gamepad2.right_trigger = .3f; op.loop();
+        near(motors.get("intake").power, -.50); near(motors.get("transfer").power, -.50);
         op.gamepad2.x = false; op.gamepad2.left_trigger = op.gamepad2.right_trigger = 0;
         op.gamepad2.y = op.gamepad2.left_bumper = op.gamepad2.dpad_up = true; op.loop();
         near(motors.get("flywheelA").velocity, 50); near(motors.get("flywheelB").velocity, 50);
@@ -413,7 +477,7 @@ public final class FastColorChecks {
         check(file.delete(), "Remove calibration fixture");
         adjustment = new Adjustment(); Teleop manual = new Teleop();
         initialize(manual, hardware(directory, null, adjustment, new HashMap<>()));
-        rb(manual); near(adjustment.position, .21); rb(manual); near(adjustment.position, .00);
+        rb(manual); near(adjustment.position, .10); rb(manual); near(adjustment.position, .00);
         rb(manual); check(((Shooter) field(manual, "shooter")).getSelectedBallType() == Shooter.BallType.UNKNOWN, "Manual without sensor/calibration; return AUTO unknown");
 
         FastColorTest test = new FastColorTest(); adjustment = new Adjustment();
@@ -464,6 +528,8 @@ public final class FastColorChecks {
         color.rgb(.1f, .2f, .7f); test.loop(); test.loop(); near(adjustment.position, .02);
         check(new BallColorSensor(color.device, file).isRedCalibrated(), "Saved red reloads for competition");
         dualFlowerChecks(directory);
+        servoCalibrationChecks(directory);
+        competitionControlChecks(directory);
         System.out.println("PASS: " + checks + " focused checks; no physical hardware or follower constructed.");
     }
 }

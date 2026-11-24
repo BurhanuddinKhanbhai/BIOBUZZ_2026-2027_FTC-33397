@@ -17,24 +17,24 @@ import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 /** Robot-centric driving on Gamepad 1 and mechanism controls on Gamepad 2. */
 @TeleOp(name = "BIOBUZZ TeleOp", group = "Competition")
 public class Teleop extends OpMode {
-    // Initial limits for an untested robot; tune within [0.0, 1.0] after hardware validation.
+    // Competition drive scales.
     private static final double NORMAL_SPEED_SCALE = 1.0;
     private static final double PRECISION_SPEED_SCALE = 0.6;
     // Per-axis threshold in [0.0, 1.0); inputs outside it retain their original magnitude.
     private static final double JOYSTICK_DEADZONE = 0.05;
     private static final double INTAKE_POWER = 1.0;
-    private static final double TRANSFER_POWER = 1.0 ;
-    // Reverse activates while the corresponding trigger exceeds this threshold.
+    private static final double TRANSFER_POWER = 1.0;
+    // Both motors reverse while the right trigger exceeds this threshold.
     private static final float TRIGGER_THRESHOLD = 0.20f;
 
-    // Encoder ticks/second. Leave zero until hardware-appropriate limits are explicitly set.
+    // Manual speed adjustment in encoder ticks/second.
     private static final double MANUAL_FLYWHEEL_MAX_VELOCITY = Double.MAX_VALUE;
     private static final double MANUAL_FLYWHEEL_INCREMENT = 50.0;
-    // Uncalibrated readiness settings: zero tolerance requires an exact velocity match.
+    // Existing readiness settings; zero tolerance requires an exact velocity match.
     private static final double FLYWHEEL_VELOCITY_TOLERANCE = 0.0;
     private static final double FLYWHEEL_STABLE_TIME_SECONDS = 0.25;
 
-    // Unset until measured on the robot. NaN is never passed as a servo command or timing value.
+    // Current calibrated shooter adjustment presets.
     private static final double POLLEN_ADJUSTMENT_POSITION = 0.1;
     private static final double NECTAR_ADJUSTMENT_POSITION = 0.0;
     private static final double ADJUSTMENT_SETTLING_SECONDS = .05;
@@ -55,12 +55,8 @@ public class Teleop extends OpMode {
     private FlowerMechanism flowerMechanism;
     private boolean previousDpadLeft;
     private boolean previousDpadRight;
-    // Retains driver intent even when the optional servo cannot yet apply a manual mode.
-    private Shooter.SelectionMode ballSelectionMode = Shooter.SelectionMode.AUTO;
     private boolean previousBallSelectionButton;
     private boolean adjustmentAvailable;
-    private boolean adjustmentCalibrated;
-    private boolean colorSensorAvailable;
     private FlywheelSpeedMode flywheelSpeedMode = FlywheelSpeedMode.AUTO;
     private boolean flywheelsEnabled;
     private double manualTargetVelocity;
@@ -114,20 +110,7 @@ public class Teleop extends OpMode {
         // Gamepad 1 right bumper is reserved for future hold-to-aim; it has no effect here.
         driveTrain.drive(forward, strafe, turn);
 
-        // Hold-to-run; reverse takes priority independently for each mechanism.
-        if (gamepad2.left_trigger > TRIGGER_THRESHOLD) {
-            intake.reverse();
-        } else if (gamepad2.a || gamepad2.x) {
-            intake.intake();
-        } else {
-            intake.stop();
-        }
-
-        // Manual transfer can feed directly into the shooter; there is no readiness interlock.
-
-// Intake and transfer controls
-// Right trigger takes priority over all forward commands.
-
+        // Current competition controls: RT overrides A, B and X.
         if (gamepad2.right_trigger > TRIGGER_THRESHOLD) {
             // Outtake: both motors reverse at 50%
             intake.setPower(-0.50);
@@ -153,7 +136,6 @@ public class Teleop extends OpMode {
             transfer.stop();
         }
 
-
         double flywheelTargetVelocity = updateFlywheels();
         updateBallSelectionMode();
         // Coordinator alone updates color, then shooter selection, then software feed readiness.
@@ -178,7 +160,7 @@ public class Teleop extends OpMode {
         telemetry.addData("Flywheel enabled request", flywheelsEnabled);
         telemetry.addData("Flywheel speed mode", flywheelSpeedMode);
         telemetry.addData("Flywheel speed status", flywheelSpeedMode == FlywheelSpeedMode.AUTO
-                ? "AUTO UNCALIBRATED" : (isManualFlywheelConfigured() ? "MANUAL" : "MANUAL UNCONFIGURED"));
+                ? "AUTO UNCALIBRATED" : "MANUAL");
         telemetry.addData("Manual target (ticks/s)", manualTargetVelocity);
         telemetry.addData("Mode target (ticks/s)", flywheelTargetVelocity);
         telemetry.addData("Commanded velocity (ticks/s)", shooter.getTargetVelocity());
@@ -226,29 +208,18 @@ public class Teleop extends OpMode {
 
     private void initializeFlowerMechanism() {
         flowerMechanism = new FlowerMechanism(hardwareMap, Servo.Direction.FORWARD, Servo.Direction.REVERSE);
-        try {
-            // Presets only: INIT never commands a flower position, including with missing hardware.
-            flowerMechanism.configurePositions(FLOWER_RAISED_POSITION, FLOWER_LOWERED_POSITION);
-        } catch (IllegalArgumentException e) {
-            RobotLog.ee("Teleop", e, "Flower UP/DOWN calibration invalid; linked movement disabled");
-        }
+        // Storing presets sends no servo position command.
+        flowerMechanism.configurePositions(FLOWER_RAISED_POSITION, FLOWER_LOWERED_POSITION);
         previousDpadLeft = previousDpadRight = false;
     }
 
     private void updateFlowerMechanism() {
         boolean left = gamepad2.dpad_left;
         boolean right = gamepad2.dpad_right;
-        if (flowerMechanism != null && flowerMechanism.isReady()) {
-            try {
-                if (left && !previousDpadLeft && !right) {
-                    flowerMechanism.lower();
-                } else if (right && !previousDpadRight && !left) {
-                    flowerMechanism.raise();
-                }
-            } catch (RuntimeException e) {
-                // Subsystem latches the fault and retains each successful commanded target.
-                RobotLog.ee("Teleop", e, "Flower command failed; linked movement disabled");
-            }
+        if (left && !previousDpadLeft && !right) {
+            flowerMechanism.lower();
+        } else if (right && !previousDpadRight && !left) {
+            flowerMechanism.raise();
         }
         // Consume both edges during a conflict; releasing one does not command the held one.
         previousDpadLeft = left;
@@ -261,7 +232,6 @@ public class Teleop extends OpMode {
         telemetry.addData("Flower servo 2 mapped/status", "%s / %s",
                 flowerMechanism.isServo2Available(), flowerMechanism.getServo2Status());
         telemetry.addData("Flower UP/DOWN calibration", flowerMechanism.getCalibrationStatus());
-        telemetry.addData("Flower linked movement enabled", flowerMechanism.isReady());
         telemetry.addData("Flower commanded state", flowerMechanism.getState());
         double target1 = flowerMechanism.getTargetPosition1();
         double target2 = flowerMechanism.getTargetPosition2();
@@ -272,12 +242,8 @@ public class Teleop extends OpMode {
 
     private void initializeBallSelection() {
         adjustmentAvailable = hardwareMap.tryGet(Servo.class, "shooterAdjust") != null;
-        adjustmentCalibrated = isServoPositionConfigured(POLLEN_ADJUSTMENT_POSITION)
-                && isServoPositionConfigured(NECTAR_ADJUSTMENT_POSITION)
-                && Double.isFinite(ADJUSTMENT_SETTLING_SECONDS) && ADJUSTMENT_SETTLING_SECONDS >= 0.0;
-        // Choose exactly one Shooter before creating any flywheel motor objects.
-        // Both motor directions remain FORWARD, as in the previous flywheel-only constructor.
-        if (adjustmentAvailable && adjustmentCalibrated) {
+        // Keep the existing optional flywheel-only construction path.
+        if (adjustmentAvailable) {
             shooter = new Shooter(hardwareMap,
                     DcMotorSimple.Direction.FORWARD,
                     DcMotorSimple.Direction.REVERSE,
@@ -290,43 +256,38 @@ public class Teleop extends OpMode {
             shooter = new Shooter(hardwareMap, FLYWHEEL_VELOCITY_TOLERANCE,
                     FLYWHEEL_STABLE_TIME_SECONDS);
         }
-        ballSelectionMode = Shooter.SelectionMode.AUTO;
         previousBallSelectionButton = false;
         shooter.setAutoMode(); // No position command, even with a fully calibrated servo.
 
         // Load only validated Fast Color references; missing/corrupt data leaves AUTO UNKNOWN.
         ballColorSensor = new BallColorSensor(hardwareMap);
-        colorSensorAvailable = ballColorSensor.isAvailable();
         shootingCoordinator = new ShootingCoordinator(shooter, ballColorSensor);
     }
 
     private void updateBallSelectionMode() {
         boolean button = gamepad2.right_bumper;
         if (button && !previousBallSelectionButton) {
-            switch (ballSelectionMode) {
+            switch (shooter.getSelectionMode()) {
                 case AUTO:
-                    ballSelectionMode = Shooter.SelectionMode.MANUAL_POLLEN;
+                    shooter.setPollenMode();
                     break;
                 case MANUAL_POLLEN:
-                    ballSelectionMode = Shooter.SelectionMode.MANUAL_NECTAR;
+                    shooter.setNectarMode();
                     break;
                 default:
-                    ballSelectionMode = Shooter.SelectionMode.AUTO;
+                    shooter.setAutoMode();
                     break;
-            }
-            if (ballSelectionMode == Shooter.SelectionMode.AUTO || (adjustmentAvailable && adjustmentCalibrated)) {
-                shooter.setSelectionMode(ballSelectionMode);
             }
         }
         previousBallSelectionButton = button;
     }
 
     private void addBallSelectionTelemetry() {
-        telemetry.addData("Ball-selection mode", ballSelectionMode);
+        telemetry.addData("Ball-selection mode", shooter.getSelectionMode());
         telemetry.addData("Detected ball type", shootingCoordinator.getDetectedBallType());
         telemetry.addData("Requested ball type", getRequestedBallType());
         telemetry.addData("Applied ball type", shooter.getSelectedBallType());
-        telemetry.addData("Color sensor mapped", colorSensorAvailable);
+        telemetry.addData("Color sensor mapped", ballColorSensor.isAvailable());
         telemetry.addData("Color calibration", ballColorSensor.getCalibrationStatus());
         telemetry.addData("Color sensor status", ballColorSensor.getStatus());
         // Cached values only: the coordinator owns the single update/read for this loop.
@@ -342,7 +303,8 @@ public class Teleop extends OpMode {
         telemetry.addData("Color support", ballColorSensor.isRedCalibrated()
                 ? "Yellow pollen / blue + red nectar" : "Yellow pollen / blue nectar; red nectar UNCALIBRATED");
         telemetry.addData("Shooter servo mapped", adjustmentAvailable);
-        telemetry.addData("Shooter servo calibration", adjustmentCalibrated ? "CONFIGURED" : "UNCALIBRATED");
+        telemetry.addData("Shooter servo presets", "Pollen %.3f / Nectar %.3f",
+                POLLEN_ADJUSTMENT_POSITION, NECTAR_ADJUSTMENT_POSITION);
         double position = shooter.getAdjustmentTargetPosition();
         telemetry.addData("Shooter servo command", Double.isNaN(position) ? "UNCOMMANDED" : position);
         telemetry.addData("Shooter servo settled", shooter.isAdjustmentSettled());
@@ -352,17 +314,13 @@ public class Teleop extends OpMode {
 
     /** Driver intent for telemetry, not confirmation that a servo command could be applied. */
     private BallColorSensor.BallType getRequestedBallType() {
-        if (ballSelectionMode == Shooter.SelectionMode.MANUAL_POLLEN) {
+        if (shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_POLLEN) {
             return BallColorSensor.BallType.POLLEN;
         }
-        if (ballSelectionMode == Shooter.SelectionMode.MANUAL_NECTAR) {
+        if (shooter.getSelectionMode() == Shooter.SelectionMode.MANUAL_NECTAR) {
             return BallColorSensor.BallType.NECTAR;
         }
         return shootingCoordinator.getDetectedBallType();
-    }
-
-    private static boolean isServoPositionConfigured(double position) {
-        return Double.isFinite(position) && position >= 0.0 && position <= 1.0;
     }
 
     /** Updates rising edges and commands velocity; returns the mode target before the ON/OFF gate. */
@@ -379,8 +337,7 @@ public class Teleop extends OpMode {
                     ? FlywheelSpeedMode.MANUAL : FlywheelSpeedMode.AUTO;
         }
 
-        boolean manualConfigured = isManualFlywheelConfigured();
-        if (flywheelSpeedMode == FlywheelSpeedMode.MANUAL && manualConfigured) {
+        if (flywheelSpeedMode == FlywheelSpeedMode.MANUAL) {
             // Ignore conflicting D-pad directions; adjustments are allowed while OFF.
             if (up && !previousDpadUp && !down) {
                 manualTargetVelocity = Math.min(MANUAL_FLYWHEEL_MAX_VELOCITY,
@@ -390,23 +347,17 @@ public class Teleop extends OpMode {
                         manualTargetVelocity - MANUAL_FLYWHEEL_INCREMENT);
             }
         }
-        // Track edges even in AUTO or while unconfigured; a held button is not a new press.
+        // Track edges even in AUTO; a held button is not a new press.
         previousY = y;
         previousSpeedModeButton = speedModeButton;
         previousDpadUp = up;
         previousDpadDown = down;
 
         // AUTO has no calibrated target yet and must never reuse the manual speed.
-        double targetVelocity = flywheelSpeedMode == FlywheelSpeedMode.MANUAL && manualConfigured
+        double targetVelocity = flywheelSpeedMode == FlywheelSpeedMode.MANUAL
                 ? manualTargetVelocity : 0.0;
         shooter.setTargetVelocity(flywheelsEnabled ? targetVelocity : 0.0);
         return targetVelocity;
-    }
-
-    private static boolean isManualFlywheelConfigured() {
-        return Double.isFinite(MANUAL_FLYWHEEL_MAX_VELOCITY) && MANUAL_FLYWHEEL_MAX_VELOCITY > 0.0
-                && Double.isFinite(MANUAL_FLYWHEEL_INCREMENT) && MANUAL_FLYWHEEL_INCREMENT > 0.0
-                && MANUAL_FLYWHEEL_INCREMENT <= MANUAL_FLYWHEEL_MAX_VELOCITY;
     }
 
     private static double applyDeadzone(double value) {

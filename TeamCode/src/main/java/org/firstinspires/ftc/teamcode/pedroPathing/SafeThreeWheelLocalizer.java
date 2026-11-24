@@ -6,27 +6,16 @@ import com.pedropathing.localization.Localizer;
 import com.pedropathing.math.Vector;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 
-import java.util.Objects;
 import java.util.function.LongSupplier;
 
 /**
- * Three passive pods, read without taking ownership of their shared motor channels.
- * Distances are inches; robot +X is forward, +Y is left, and positive heading is
- * counterclockwise. Parallel pods measure +X and the perpendicular pod measures +Y.
- * All hardware access is through getCurrentPosition(); resets only capture baselines.
- *
- * Encoder signs apply to SDK-reported counts, which already reflect the motor's
- * configured direction/type. Configure those motors first and keep their configuration
- * stable while localizing. After any external counter/configuration change, explicitly
- * rebaseline with setPose(). A hardware reset producing a plausible delta cannot be
- * distinguished from real motion. Bounds also cannot detect arbitrary multiple wraps.
- *
- * Call from one control-loop thread. Rejected samples leave the last accepted pose
- * intact, clear velocity, and flag invalid feedback through isSampleValid()/isNAN().
- * This class does not stop motors; its caller must handle invalid localization feedback.
+ * Three passive pods read through their shared motor encoder channels.
+ * Inches, robot +X forward, +Y left, and counterclockwise heading.
+ * All hardware access is getCurrentPosition(); pose changes capture software baselines only.
+ * Encoder signs apply to SDK counts, including the motor owner's configured direction.
  */
 public final class SafeThreeWheelLocalizer implements Localizer {
-    /** No physical dimensions, directions, calibration factors, or motion limits default. */
+    /** Measured wheel, encoder, signed-offset and distance-correction parameters. */
     public static final class Configuration {
         private final int leftSign;
         private final int rightSign;
@@ -38,65 +27,27 @@ public final class SafeThreeWheelLocalizer implements Localizer {
         private final double forwardScale;
         private final double lateralScale;
         private final double turningScale;
-        private final double maxTicksPerSecond;
-        private final double maxSampleIntervalSeconds;
 
         /**
-         * All pods use the supplied wheel/encoder specification. ticksPerRevolution is
-         * the count reported by the SDK per encoder-shaft revolution; gearRatio is
-         * encoder revolutions per odometry-wheel revolution. Signs must be +1 or -1.
-         * Offsets are signed distances from the robot's chosen tracking origin.
-         * Corrections are positive, dimensionless factors applied to the nominal
-         * inches-per-tick scale (including a separate angular calibration factor).
-         *
-         * maxTicksPerSecond is an explicit plausible bound for EACH pod, including
-         * rotation; a one-count quantization allowance is added when checking samples.
-         * maxSampleIntervalSeconds limits gaps that may hide motion/counter wraps.
+         * ticksPerRevolution is SDK counts per encoder revolution; gearRatio is encoder
+         * revolutions per pod-wheel revolution. Offsets are relative to the tracking origin.
          */
         public Configuration(double ticksPerRevolution, double wheelDiameterInches,
                              double gearRatio, int leftSign, int rightSign,
                              int perpendicularSign, double leftYInches, double rightYInches,
                              double perpendicularXInches, double forwardCorrection,
-                             double lateralCorrection, double turningCorrection,
-                             double maxTicksPerSecond, double maxSampleIntervalSeconds) {
-            requirePositive(ticksPerRevolution, "ticksPerRevolution");
-            requirePositive(wheelDiameterInches, "wheelDiameterInches");
-            requirePositive(gearRatio, "gearRatio");
-            requireSign(leftSign, "leftSign");
-            requireSign(rightSign, "rightSign");
-            requireSign(perpendicularSign, "perpendicularSign");
-            requireFinite(leftYInches, "leftYInches");
-            requireFinite(rightYInches, "rightYInches");
-            requireFinite(perpendicularXInches, "perpendicularXInches");
-            requirePositive(forwardCorrection, "forwardCorrection");
-            requirePositive(lateralCorrection, "lateralCorrection");
-            requirePositive(turningCorrection, "turningCorrection");
-            requirePositive(maxTicksPerSecond, "maxTicksPerSecond");
-            requirePositive(maxSampleIntervalSeconds, "maxSampleIntervalSeconds");
-
+                             double lateralCorrection, double turningCorrection) {
             separation = leftYInches - rightYInches;
-            if (!Double.isFinite(separation) || separation == 0.0) {
-                throw new IllegalArgumentException("Parallel pod positions must have finite, nonzero separation");
-            }
             double nominalScale = (wheelDiameterInches * Math.PI / ticksPerRevolution) / gearRatio;
             forwardScale = nominalScale * forwardCorrection;
             lateralScale = nominalScale * lateralCorrection;
             turningScale = nominalScale * turningCorrection;
-            requirePositive(forwardScale, "forward inches per tick");
-            requirePositive(lateralScale, "lateral inches per tick");
-            requirePositive(turningScale, "turning inches per tick");
-            // Unambiguous modular subtraction requires strictly less than half a wrap.
-            if (!(maxTicksPerSecond * maxSampleIntervalSeconds + 1.0 < Integer.MAX_VALUE)) {
-                throw new IllegalArgumentException("Tick-rate/interval bounds must allow less than half a counter wrap");
-            }
             this.leftSign = leftSign;
             this.rightSign = rightSign;
             this.perpendicularSign = perpendicularSign;
             leftY = leftYInches;
             rightY = rightYInches;
             perpendicularX = perpendicularXInches;
-            this.maxTicksPerSecond = maxTicksPerSecond;
-            this.maxSampleIntervalSeconds = maxSampleIntervalSeconds;
         }
     }
 
@@ -109,9 +60,6 @@ public final class SafeThreeWheelLocalizer implements Localizer {
     private int previousRight;
     private int previousPerpendicular;
     private long previousTime;
-    private boolean hasBaseline;
-    private boolean sampleValid;
-    private String status;
     private Pose startPose = new Pose();
     private Pose pose = new Pose();
     private Pose velocity = new Pose();
@@ -126,40 +74,20 @@ public final class SafeThreeWheelLocalizer implements Localizer {
     public SafeThreeWheelLocalizer(DcMotorEx leftEncoder, DcMotorEx rightEncoder,
                                   DcMotorEx perpendicularEncoder, Configuration configuration,
                                   LongSupplier nanoClock) {
-        this.leftEncoder = Objects.requireNonNull(leftEncoder, "leftEncoder");
-        this.rightEncoder = Objects.requireNonNull(rightEncoder, "rightEncoder");
-        this.perpendicularEncoder = Objects.requireNonNull(perpendicularEncoder, "perpendicularEncoder");
-        if (leftEncoder == rightEncoder || leftEncoder == perpendicularEncoder
-                || rightEncoder == perpendicularEncoder) {
-            throw new IllegalArgumentException("Three distinct encoder sources are required");
-        }
-        this.configuration = Objects.requireNonNull(configuration, "configuration");
-        this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
+        this.leftEncoder = leftEncoder;
+        this.rightEncoder = rightEncoder;
+        this.perpendicularEncoder = perpendicularEncoder;
+        this.configuration = configuration;
+        this.nanoClock = nanoClock;
         captureBaseline();
     }
 
     @Override
     public void update() {
-        final int left;
-        final int right;
-        final int perpendicular;
-        final long now;
-        try {
-            left = leftEncoder.getCurrentPosition();
-            right = rightEncoder.getCurrentPosition();
-            perpendicular = perpendicularEncoder.getCurrentPosition();
-            now = nanoClock.getAsLong();
-        } catch (RuntimeException failure) {
-            // A partial read cannot form a coherent baseline. Discard the next full sample.
-            hasBaseline = false;
-            reject("Encoder/clock read failed: " + failure);
-            return;
-        }
-        if (!hasBaseline) {
-            storeBaseline(left, right, perpendicular, now);
-            reject("Baseline recovered; awaiting a complete motion interval");
-            return;
-        }
+        int left = leftEncoder.getCurrentPosition();
+        int right = rightEncoder.getCurrentPosition();
+        int perpendicular = perpendicularEncoder.getCurrentPosition();
+        long now = nanoClock.getAsLong();
 
         // Subtract as int for modulo-2^32 wrap handling, then widen before applying signs.
         long leftTicks = (long) (left - previousLeft) * configuration.leftSign;
@@ -167,18 +95,7 @@ public final class SafeThreeWheelLocalizer implements Localizer {
         long perpendicularTicks = (long) (perpendicular - previousPerpendicular)
                 * configuration.perpendicularSign;
         double dt = (now - previousTime) * 1.0e-9;
-        // Advance counts AND time even on rejection: rejected movement is never replayed.
         storeBaseline(left, right, perpendicular, now);
-        if (!Double.isFinite(dt) || dt <= 0.0 || dt > configuration.maxSampleIntervalSeconds) {
-            reject("Invalid or excessive sample interval");
-            return;
-        }
-        double tickLimit = configuration.maxTicksPerSecond * dt + 1.0;
-        if (Math.abs(leftTicks) > tickLimit || Math.abs(rightTicks) > tickLimit
-                || Math.abs(perpendicularTicks) > tickLimit) {
-            reject("Implausible encoder delta");
-            return;
-        }
 
         double headingDelta = (rightTicks - leftTicks) * configuration.turningScale
                 / configuration.separation;
@@ -186,11 +103,6 @@ public final class SafeThreeWheelLocalizer implements Localizer {
                 * configuration.forwardScale / configuration.separation;
         double lateral = perpendicularTicks * configuration.lateralScale
                 - configuration.perpendicularX * headingDelta;
-        if (!Double.isFinite(forward) || !Double.isFinite(lateral) || !Double.isFinite(headingDelta)) {
-            reject("Nonfinite displacement");
-            return;
-        }
-
         // SE(2) exponential: integrate the body twist along an arc, including near-zero turns.
         double sinc;
         double cosc;
@@ -208,20 +120,11 @@ public final class SafeThreeWheelLocalizer implements Localizer {
         double sine = Math.sin(pose.getHeading());
         double fieldX = cosine * bodyX - sine * bodyY;
         double fieldY = sine * bodyX + cosine * bodyY;
-        Pose nextPose = new Pose(pose.getX() + fieldX, pose.getY() + fieldY,
+        pose = new Pose(pose.getX() + fieldX, pose.getY() + fieldY,
                 pose.getHeading() + headingDelta);
-        Pose nextVelocity = new Pose(fieldX / dt, fieldY / dt, headingDelta / dt);
-        double nextTotalHeading = totalHeading + headingDelta;
-        if (!finitePose(nextPose) || !finitePose(nextVelocity) || !Double.isFinite(nextTotalHeading)
-                || !Double.isFinite(Math.hypot(nextVelocity.getX(), nextVelocity.getY()))) {
-            reject("Nonfinite pose or velocity");
-            return;
-        }
-        pose = nextPose;
-        velocity = nextVelocity;
-        totalHeading = nextTotalHeading;
-        sampleValid = true;
-        status = "OK";
+        // No velocity can be calculated between identical clock ticks; pose integration is retained.
+        velocity = dt > 0.0 ? new Pose(fieldX / dt, fieldY / dt, headingDelta / dt) : new Pose();
+        totalHeading += headingDelta;
     }
 
     @Override
@@ -229,7 +132,7 @@ public final class SafeThreeWheelLocalizer implements Localizer {
         return pose;
     }
 
-    /** Field-frame average velocity over the last accepted interval; heading is radians/second. */
+    /** Field-frame average velocity over the last interval; heading is radians/second. */
     @Override
     public Pose getVelocity() {
         return velocity;
@@ -244,8 +147,8 @@ public final class SafeThreeWheelLocalizer implements Localizer {
     /** Pedro semantics: shift the start while preserving accumulated field-frame displacement. */
     @Override
     public void setStartPose(Pose newStart) {
-        Pose checkedStart = checkedPose(newStart);
-        Pose relocated = checkedPose(checkedStart.plus(pose.minus(startPose)));
+        Pose checkedStart = newStart.getAsCoordinateSystem(PedroCoordinates.INSTANCE);
+        Pose relocated = checkedStart.plus(pose.minus(startPose));
         captureBaseline();
         startPose = checkedStart;
         pose = relocated;
@@ -254,7 +157,7 @@ public final class SafeThreeWheelLocalizer implements Localizer {
     /** Rebase current pose/counts; preserve the starting pose and accumulated measured turn. */
     @Override
     public void setPose(Pose newPose) {
-        Pose checked = checkedPose(newPose);
+        Pose checked = newPose.getAsCoordinateSystem(PedroCoordinates.INSTANCE);
         captureBaseline();
         pose = checked;
     }
@@ -292,35 +195,16 @@ public final class SafeThreeWheelLocalizer implements Localizer {
         return Double.NaN;
     }
 
-    /** Also flags rejected feedback, even though the last accepted pose remains finite. */
+    /** Required Localizer metadata; no custom gate or sample-rejection state. */
     @Override
     public boolean isNAN() {
-        return !sampleValid || !finitePose(pose) || !finitePose(velocity);
-    }
-
-    public boolean isSampleValid() {
-        return sampleValid;
-    }
-
-    public String getStatus() {
-        return status;
+        return !finitePose(pose) || !finitePose(velocity);
     }
 
     private void captureBaseline() {
-        try {
-            int left = leftEncoder.getCurrentPosition();
-            int right = rightEncoder.getCurrentPosition();
-            int perpendicular = perpendicularEncoder.getCurrentPosition();
-            long now = nanoClock.getAsLong();
-            storeBaseline(left, right, perpendicular, now);
-            velocity = new Pose();
-            sampleValid = true;
-            status = "Baselined; no motion interval yet";
-        } catch (RuntimeException failure) {
-            hasBaseline = false;
-            reject("Cannot establish software baseline: " + failure);
-            throw failure;
-        }
+        storeBaseline(leftEncoder.getCurrentPosition(), rightEncoder.getCurrentPosition(),
+                perpendicularEncoder.getCurrentPosition(), nanoClock.getAsLong());
+        velocity = new Pose();
     }
 
     private void storeBaseline(int left, int right, int perpendicular, long now) {
@@ -328,25 +212,6 @@ public final class SafeThreeWheelLocalizer implements Localizer {
         previousRight = right;
         previousPerpendicular = perpendicular;
         previousTime = now;
-        hasBaseline = true;
-    }
-
-    private void reject(String reason) {
-        velocity = new Pose();
-        sampleValid = false;
-        status = reason;
-    }
-
-    private static Pose checkedPose(Pose value) {
-        Objects.requireNonNull(value, "pose");
-        if (!finitePose(value)) {
-            throw new IllegalArgumentException("Pose must be finite");
-        }
-        Pose converted = value.getAsCoordinateSystem(PedroCoordinates.INSTANCE);
-        if (!finitePose(converted)) {
-            throw new IllegalArgumentException("Converted Pedro pose must be finite");
-        }
-        return converted;
     }
 
     private static boolean finitePose(Pose value) {
@@ -354,21 +219,4 @@ public final class SafeThreeWheelLocalizer implements Localizer {
                 && Double.isFinite(value.getHeading());
     }
 
-    private static void requireFinite(double value, String name) {
-        if (!Double.isFinite(value)) {
-            throw new IllegalArgumentException(name + " must be finite");
-        }
-    }
-
-    private static void requirePositive(double value, String name) {
-        if (!Double.isFinite(value) || value <= 0.0) {
-            throw new IllegalArgumentException(name + " must be finite and positive");
-        }
-    }
-
-    private static void requireSign(int value, String name) {
-        if (value != 1 && value != -1) {
-            throw new IllegalArgumentException(name + " must be +1 or -1");
-        }
-    }
 }

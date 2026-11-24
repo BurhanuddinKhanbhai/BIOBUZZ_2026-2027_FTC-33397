@@ -28,16 +28,15 @@ public class Shooter {
     private long withinToleranceSinceNanos;
 
     private Servo adjustmentServo;
-    private boolean adjustmentPositionsConfigured;
-    private double pollenPosition;
-    private double nectarPosition;
+    private double pollenPosition = Double.NaN;
+    private double nectarPosition = Double.NaN;
     private double adjustmentTargetPosition = Double.NaN;
     private double adjustmentSettlingSeconds;
     private long adjustmentCommandNanos;
     private BallType selectedBallType = BallType.UNKNOWN;
     private SelectionMode selectionMode = SelectionMode.MANUAL;
 
-    /** Uses FORWARD for both motors; readiness thresholds must be supplied explicitly. */
+    /** Uses FORWARD for A and REVERSE for B; readiness thresholds must be supplied explicitly. */
     public Shooter(HardwareMap hardwareMap, double velocityTolerance, double stableTimeSeconds) {
         this(hardwareMap, DcMotorSimple.Direction.FORWARD, DcMotorSimple.Direction.REVERSE,
                 velocityTolerance, stableTimeSeconds);
@@ -45,8 +44,7 @@ public class Shooter {
 
     /**
      * Configure each direction so intended shooting rotation reports positive velocity.
-     * Map flywheelA to Control Hub motor port 3 and flywheelB to Expansion Hub motor port 3,
-     * with each motor's encoder connected to its corresponding encoder port 3.
+     * Map flywheelA to Expansion Hub motor/encoder 2 and flywheelB to Control Hub motor/encoder 3.
      *
      * @param velocityTolerance allowed error per motor in encoder ticks per second
      * @param stableTimeSeconds required observed time in tolerance; zero permits immediate readiness
@@ -54,11 +52,6 @@ public class Shooter {
     public Shooter(HardwareMap hardwareMap, DcMotorSimple.Direction directionA,
                    DcMotorSimple.Direction directionB, double velocityTolerance,
                    double stableTimeSeconds) {
-        if (hardwareMap == null || directionA == null || directionB == null) {
-            throw new IllegalArgumentException("Hardware map and flywheel directions must not be null");
-        }
-        validateNonnegative(velocityTolerance, "Velocity tolerance");
-        validateNonnegative(stableTimeSeconds, "Stable time");
         this.velocityTolerance = velocityTolerance;
         this.stableTimeSeconds = stableTimeSeconds;
         flywheelA = initializeMotor(hardwareMap, "flywheelA", directionA);
@@ -66,7 +59,7 @@ public class Shooter {
     }
 
     /**
-     * Adds the optional "shooterAdjust" servo on Control Hub servo port 0.
+     * Adds the optional "shooterAdjust" servo on Expansion Hub servo port 1.
      * Existing constructors remain flywheel-only and never look up this servo.
      * Sets direction without commanding a position; presets require explicit configuration.
      * The settling interval is a time estimate in seconds, not position feedback.
@@ -76,10 +69,6 @@ public class Shooter {
                    double stableTimeSeconds, Servo.Direction adjustmentDirection,
                    double adjustmentSettlingSeconds) {
         this(hardwareMap, directionA, directionB, velocityTolerance, stableTimeSeconds);
-        if (adjustmentDirection == null) {
-            throw new IllegalArgumentException("Adjustment servo direction must not be null");
-        }
-        validateNonnegative(adjustmentSettlingSeconds, "Adjustment settling time");
         adjustmentServo = hardwareMap.get(Servo.class, "shooterAdjust");
         adjustmentServo.setDirection(adjustmentDirection);
         this.adjustmentSettlingSeconds = adjustmentSettlingSeconds;
@@ -88,13 +77,8 @@ public class Shooter {
     /**
      * Commands both motors in encoder ticks per second. Zero stops and clears readiness.
      * Repeating the same target preserves the stability timer.
-     * Invalid targets stop both motors and throw IllegalArgumentException.
      */
     public void setTargetVelocity(double ticksPerSecond) {
-        if (!isFinite(ticksPerSecond) || ticksPerSecond < 0.0) {
-            stop();
-            throw new IllegalArgumentException("Target velocity must be finite and nonnegative");
-        }
         if (ticksPerSecond == 0.0) {
             stop();
             return;
@@ -160,9 +144,8 @@ public class Shooter {
         }
         double velocityA = getVelocityA();
         double velocityB = getVelocityB();
-        if (!isFinite(velocityA) || !isFinite(velocityB)
-                || Math.abs(targetVelocity - velocityA) > velocityTolerance
-                || Math.abs(targetVelocity - velocityB) > velocityTolerance) {
+        if (!(Math.abs(targetVelocity - velocityA) <= velocityTolerance
+                && Math.abs(targetVelocity - velocityB) <= velocityTolerance)) {
             trackingStableTime = false;
             return false;
         }
@@ -174,9 +157,8 @@ public class Shooter {
         return (now - withinToleranceSinceNanos) / 1_000_000_000.0 >= stableTimeSeconds;
     }
 
-    /** Sets the finite, nonnegative tolerance in ticks per second; changes restart timing. */
+    /** Sets the tolerance in ticks per second; changes restart timing. */
     public void setVelocityTolerance(double velocityTolerance) {
-        validateNonnegative(velocityTolerance, "Velocity tolerance");
         if (this.velocityTolerance != velocityTolerance) {
             trackingStableTime = false;
         }
@@ -187,9 +169,8 @@ public class Shooter {
         return velocityTolerance;
     }
 
-    /** Sets the finite, nonnegative stability duration in seconds; changes restart timing. */
+    /** Sets the stability duration in seconds; changes restart timing. */
     public void setStableTimeSeconds(double stableTimeSeconds) {
-        validateNonnegative(stableTimeSeconds, "Stable time");
         if (this.stableTimeSeconds != stableTimeSeconds) {
             trackingStableTime = false;
         }
@@ -202,15 +183,11 @@ public class Shooter {
 
     /**
      * Configures presets in the servo's configured direction without commanding movement.
-     * Both values must be finite and within [0.0, 1.0]. Changes leave command history intact;
-     * call a mode method explicitly to apply a new preset.
+     * Changes leave command history intact; call a mode method to apply a new preset.
      */
     public void configureAdjustmentPositions(double pollen, double nectar) {
-        validateAdjustmentPosition(pollen);
-        validateAdjustmentPosition(nectar);
         pollenPosition = pollen;
         nectarPosition = nectar;
-        adjustmentPositionsConfigured = true;
     }
 
     /** Manually selects pollen; requires the optional servo and configured presets. */
@@ -243,7 +220,7 @@ public class Shooter {
             return;
         }
         selectedBallType = BallType.UNKNOWN;
-        if (adjustmentServo == null || !adjustmentPositionsConfigured || detectedBallType == null) {
+        if (detectedBallType == null) {
             return;
         }
         switch (detectedBallType) {
@@ -266,7 +243,7 @@ public class Shooter {
     public boolean isReadyToFeed() {
         boolean atSpeed = isAtSpeed();
         if (!atSpeed || selectedBallType == BallType.UNKNOWN
-                || !adjustmentPositionsConfigured || !isAdjustmentSettled()) {
+                || !isAdjustmentSettled()) {
             return false;
         }
         double requiredPosition = selectedBallType == BallType.POLLEN ? pollenPosition : nectarPosition;
@@ -284,11 +261,10 @@ public class Shooter {
     }
 
     /**
-     * Sets a finite, nonnegative settling interval. Changing it re-evaluates elapsed time
+     * Sets the settling interval. Changing it re-evaluates elapsed time
      * from the last position command; it does not move the servo or restart that timestamp.
      */
     public void setAdjustmentSettlingSeconds(double seconds) {
-        validateNonnegative(seconds, "Adjustment settling time");
         adjustmentSettlingSeconds = seconds;
     }
 
@@ -311,9 +287,6 @@ public class Shooter {
      * Legacy MANUAL retains the current selection and servo target without movement.
      */
     public void setSelectionMode(SelectionMode mode) {
-        if (mode == null) {
-            throw new IllegalArgumentException("Shooter selection mode must not be null");
-        }
         switch (mode) {
             case AUTO:
                 setAutoMode();
@@ -335,11 +308,9 @@ public class Shooter {
     }
 
     private void commandAdjustment(BallType ballType, double position) {
-        if (adjustmentServo == null) {
-            throw new IllegalStateException("Use the servo-aware Shooter constructor for adjustment commands");
-        }
-        if (!adjustmentPositionsConfigured) {
-            throw new IllegalStateException("Configure adjustment positions before selecting a ball type");
+        if (adjustmentServo == null || Double.isNaN(position)) {
+            selectedBallType = BallType.UNKNOWN; // Flywheel-only caller or no target supplied.
+            return;
         }
         if (Double.isNaN(adjustmentTargetPosition) || position != adjustmentTargetPosition) {
             adjustmentServo.setPosition(position);
@@ -347,12 +318,6 @@ public class Shooter {
             adjustmentCommandNanos = System.nanoTime();
         }
         selectedBallType = ballType;
-    }
-
-    private static void validateAdjustmentPosition(double position) {
-        if (!isFinite(position) || position < 0.0 || position > 1.0) {
-            throw new IllegalArgumentException("Adjustment position must be finite and between 0.0 and 1.0");
-        }
     }
 
     private static DcMotorEx initializeMotor(HardwareMap hardwareMap, String name,
@@ -365,13 +330,4 @@ public class Shooter {
         return motor;
     }
 
-    private static void validateNonnegative(double value, String name) {
-        if (!isFinite(value) || value < 0.0) {
-            throw new IllegalArgumentException(name + " must be finite and nonnegative");
-        }
-    }
-
-    private static boolean isFinite(double value) {
-        return !Double.isNaN(value) && !Double.isInfinite(value);
-    }
 }

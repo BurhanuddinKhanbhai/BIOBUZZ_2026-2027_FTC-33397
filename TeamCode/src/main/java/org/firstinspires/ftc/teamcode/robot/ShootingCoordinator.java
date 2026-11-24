@@ -29,9 +29,6 @@ public class ShootingCoordinator {
      */
     public ShootingCoordinator(Shooter shooter, BallColorSensor colorSensor,
                                LimelightVision vision) {
-        if (shooter == null) {
-            throw new IllegalArgumentException("Shooter must not be null");
-        }
         this.shooter = shooter;
         this.colorSensor = colorSensor;
         this.vision = vision;

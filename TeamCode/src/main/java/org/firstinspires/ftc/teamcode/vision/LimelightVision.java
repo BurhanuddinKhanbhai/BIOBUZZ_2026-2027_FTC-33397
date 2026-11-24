@@ -33,11 +33,6 @@ public class LimelightVision {
      * Missing "limelight" hardware is allowed and reported through isAvailable()/getStatus().
      */
     public LimelightVision(HardwareMap hardwareMap, int pipelineIndex, long maxResultAgeMillis) {
-        if (hardwareMap == null) {
-            throw new IllegalArgumentException("Hardware map must not be null");
-        }
-        validatePipelineIndex(pipelineIndex);
-        validateMaxAge(maxResultAgeMillis);
         this.pipelineIndex = pipelineIndex;
         this.maxResultAgeMillis = maxResultAgeMillis;
         limelight = hardwareMap.tryGet(Limelight3A.class, "limelight");
@@ -60,14 +55,8 @@ public class LimelightVision {
         if (!selectPipeline()) {
             return;
         }
-        try {
-            limelight.start();
-            status = limelight.isRunning() ? "NO_RESULT" : "START_ERROR";
-        } catch (RuntimeException e) {
-            result = null;
-            pipelineSelected = false;
-            status = "START_ERROR";
-        }
+        limelight.start();
+        status = limelight.isRunning() ? "NO_RESULT" : "STOPPED";
     }
 
     /** Stops polling and immediately invalidates all target measurements. */
@@ -76,13 +65,7 @@ public class LimelightVision {
         pipelineSelected = false;
         waitingForNewFrame = true;
         status = limelight == null ? "MISSING" : "STOPPED";
-        if (limelight != null) {
-            try {
-                limelight.stop();
-            } catch (RuntimeException e) {
-                status = "STOP_ERROR";
-            }
-        }
+        if (limelight != null) limelight.stop();
     }
 
     /**
@@ -141,7 +124,6 @@ public class LimelightVision {
      * While stopped, the pipeline is only stored and will be applied by start().
      */
     public void setPipelineIndex(int pipelineIndex) {
-        validatePipelineIndex(pipelineIndex);
         if (this.pipelineIndex == pipelineIndex && pipelineSelected) {
             return;
         }
@@ -161,7 +143,6 @@ public class LimelightVision {
     }
 
     public void setMaxResultAgeMillis(long maxResultAgeMillis) {
-        validateMaxAge(maxResultAgeMillis);
         this.maxResultAgeMillis = maxResultAgeMillis;
     }
 
@@ -175,20 +156,12 @@ public class LimelightVision {
     }
 
     public boolean isRunning() {
-        try {
-            return limelight != null && limelight.isRunning();
-        } catch (RuntimeException e) {
-            return false;
-        }
+        return limelight != null && limelight.isRunning();
     }
 
     /** Uses the SDK's inexpensive recent-response connection check. */
     public boolean isConnected() {
-        try {
-            return limelight != null && limelight.isConnected();
-        } catch (RuntimeException e) {
-            return false;
-        }
+        return limelight != null && limelight.isConnected();
     }
 
     /**
@@ -219,7 +192,7 @@ public class LimelightVision {
             return status;
         }
         if (!isRunning()) {
-            return "START_ERROR".equals(status) ? status : "STOPPED";
+            return "STOPPED";
         }
         if (!isConnected()) {
             return "DISCONNECTED";
@@ -296,33 +269,16 @@ public class LimelightVision {
         result = null;
         pipelineSelected = false;
         waitingForNewFrame = true;
-        try {
-            if (!limelight.pipelineSwitch(pipelineIndex)) {
-                status = "PIPELINE_ERROR";
-                return false;
-            }
-            // Reject the already cached frame until a different camera timestamp arrives.
-            LLResult previous = limelight.getLatestResult();
-            frameTimestamp = previous == null ? Double.NaN : previous.getTimestamp();
-            pipelineSelected = true;
-            status = "NO_RESULT";
-            return true;
-        } catch (RuntimeException e) {
+        if (!limelight.pipelineSwitch(pipelineIndex)) {
             status = "PIPELINE_ERROR";
             return false;
         }
-    }
-
-    private static void validatePipelineIndex(int index) {
-        if (index < 0) {
-            throw new IllegalArgumentException("Pipeline index must be nonnegative and exist on the camera");
-        }
-    }
-
-    private static void validateMaxAge(long milliseconds) {
-        if (milliseconds <= 0) {
-            throw new IllegalArgumentException("Maximum result age must be positive milliseconds");
-        }
+        // A cached result from the previous pipeline is not a new camera observation.
+        LLResult previous = limelight.getLatestResult();
+        frameTimestamp = previous == null ? Double.NaN : previous.getTimestamp();
+        pipelineSelected = true;
+        status = "NO_RESULT";
+        return true;
     }
 
     private static boolean isFinite(double value) {

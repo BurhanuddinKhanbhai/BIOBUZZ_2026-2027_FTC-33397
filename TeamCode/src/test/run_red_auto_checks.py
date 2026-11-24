@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Deterministic host checks: real route/controller/geometry, mocked follower and sensor hardware.
-No physical follower is constructed and no production calibration guard is changed.
+No physical follower or robot is constructed.
 """
 from pathlib import Path
 import os
@@ -71,40 +71,34 @@ public class Shooter {
  public double getTargetVelocity(){return target;} public double getVelocityA(){return a.getVelocity();} public double getVelocityB(){return b.getVelocity();}
  public void stop(){stopCalls++;if(throwStop)throw new IllegalStateException("shooter stop");setTargetVelocity(0);}
 }''',
-'org/firstinspires/ftc/teamcode/pedroPathing/SafeThreeWheelLocalizer.java': '''package org.firstinspires.ftc.teamcode.pedroPathing;
-public class SafeThreeWheelLocalizer { public boolean valid=true;public boolean isSampleValid(){return valid;}public String getStatus(){return valid?"VALID":"INVALID";} }''',
 'com/pedropathing/paths/Path.java': '''package com.pedropathing.paths;
 import com.pedropathing.geometry.BezierLine;
 public class Path {public double t,heading;public PathConstraints constraints;public Path(BezierLine l,PathConstraints c){constraints=c;}public void setConstantHeadingInterpolation(double h){heading=h;}public double getClosestPointTValue(){return t;}}
 ''',
 'com/pedropathing/follower/Follower.java': '''package com.pedropathing.follower;
-import com.pedropathing.geometry.Pose;import com.pedropathing.math.Vector;import com.pedropathing.paths.Path;
-import com.qualcomm.robotcore.hardware.*;import java.util.function.Consumer;
-import org.firstinspires.ftc.teamcode.pedroPathing.SafeThreeWheelLocalizer;
+import com.pedropathing.geometry.Pose;import com.pedropathing.paths.Path;
+import com.qualcomm.robotcore.hardware.*;
 public class Follower {
- public static Follower instance;public final SafeThreeWheelLocalizer localizer=new SafeThreeWheelLocalizer();
- public Pose pose=new Pose();public double speed,angular,turnDelta;public boolean busy,throwStop;
- public int updates,outputUpdates,stopCalls,pathCalls,turnCalls;public Path path;public double power;
- private final HardwareMap map;private final Consumer<Pose> validator;
- public Follower(HardwareMap m,Consumer<Pose> v){instance=this;map=m;validator=v;}
- public static class Tracker {private final SafeThreeWheelLocalizer l;Tracker(SafeThreeWheelLocalizer l){this.l=l;}public SafeThreeWheelLocalizer getLocalizer(){return l;}}
- public Tracker getPoseTracker(){return new Tracker(localizer);}
+ public static Follower instance;
+ public Pose pose=new Pose(); public double turnDelta,power; public boolean busy,throwStop;
+ public int updates,outputUpdates,stopCalls,pathCalls,turnCalls; public Path path;
+ private final HardwareMap map;
+ public Follower(HardwareMap m){instance=this;map=m;}
  public void setStartingPose(Pose p){pose=p;}
- public void update(){updates++;if(!localizer.valid)throw new IllegalStateException("invalid localizer");validator.accept(pose);if(busy){outputUpdates++;for(String n:new String[]{"frontLeft","frontRight","backLeft","backRight"})map.get(DcMotorEx.class,n).setPower(power);}}
- public Pose getPose(){return pose;}public Vector getVelocity(){return new Vector(speed,0);}public double getAngularVelocity(){return angular;}
- public boolean isLocalizationNAN(){return !localizer.valid;}public boolean isBusy(){return busy;}
- public void setMaxPower(double p){power=p;}public void followPath(Path p,boolean hold){path=p;pathCalls++;busy=true;}
+ public void update(){updates++;if(busy){outputUpdates++;for(String n:new String[]{"frontLeft","frontRight","backLeft","backRight"})map.get(DcMotorEx.class,n).setPower(power);}}
+ public Pose getPose(){return pose;} public boolean isBusy(){return busy;}
+ public void setMaxPower(double p){power=p;} public void followPath(Path p,boolean hold){path=p;pathCalls++;busy=true;}
  public void turn(double delta){turnDelta=delta;turnCalls++;busy=true;}
  public void breakFollowing(){stopCalls++;if(throwStop)throw new IllegalStateException("follower stop");busy=false;for(String n:new String[]{"frontLeft","frontRight","backLeft","backRight"})map.get(DcMotorEx.class,n).setPower(0);}
 }''',
 'org/firstinspires/ftc/teamcode/pedroPathing/Constants.java': '''package org.firstinspires.ftc.teamcode.pedroPathing;
-import com.pedropathing.follower.Follower;import com.pedropathing.geometry.Pose;import com.pedropathing.paths.PathConstraints;
-import com.qualcomm.robotcore.hardware.HardwareMap;import java.util.function.Consumer;
-public class Constants { public static String issue;public static double mecanumMaxPower=.5;
- public static PathConstraints pathConstraints=new PathConstraints(.99,1,1,1);
- public static String getConfigurationIssue(){return issue;}
- public static Follower createFollower(HardwareMap m,Consumer<Pose> v){if(issue!=null)throw new IllegalStateException(issue);return new Follower(m,v);}
+import com.pedropathing.follower.Follower;import com.pedropathing.paths.PathConstraints;
+import com.qualcomm.robotcore.hardware.HardwareMap;
+public class Constants { public static double mecanumMaxPower=1;
+ public static PathConstraints pathConstraints=new PathConstraints(.99,100,1,1);
+ public static Follower createFollower(HardwareMap m){return new Follower(m);}
 }''',
+
 }
 with tempfile.TemporaryDirectory(prefix='biobuzz-red-auto-checks-') as directory:
     temp = Path(directory)

@@ -1,4 +1,3 @@
-
 package org.firstinspires.ftc.teamcode.autonomous;
 
 import com.pedropathing.geometry.Pose;
@@ -40,8 +39,6 @@ public final class RedAutoPlan {
             new Pose[Step.values().length];
 
     public RedAutoPlan(double intake2Distance) {
-        requirePositive(intake2Distance, "INTAKE_2 distance");
-
         start = new Pose(0, 0, 0);
         Pose planned = start;
 
@@ -98,20 +95,7 @@ public final class RedAutoPlan {
     }
 
     public Pose getTarget(Step step) {
-        if (step == null) {
-            throw new IllegalArgumentException(
-                    "Autonomous step is required"
-            );
-        }
-
         return targets[step.ordinal()];
-    }
-
-    public boolean contains(Pose pose) {
-        return pose != null
-                && Double.isFinite(pose.getX())
-                && Double.isFinite(pose.getY())
-                && Double.isFinite(pose.getHeading());
     }
 
     public static boolean isDrive(Step step) {
@@ -182,14 +166,4 @@ public final class RedAutoPlan {
                 % (2.0 * Math.PI);
     }
 
-    private static void requirePositive(
-            double value,
-            String name
-    ) {
-        if (!Double.isFinite(value) || value <= 0.0) {
-            throw new IllegalArgumentException(
-                    name + " must be finite and positive"
-            );
-        }
-    }
 }

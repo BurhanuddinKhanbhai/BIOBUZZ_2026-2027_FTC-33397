@@ -11,7 +11,7 @@ public class Intake {
     private double defaultPower;
     private double power;
 
-    /** Uses FORWARD direction and full power for intake/reverse commands. */
+    /** Uses REVERSE direction and full power for intake/reverse commands. */
     public Intake(HardwareMap hardwareMap) {
         this(hardwareMap, DcMotorSimple.Direction.REVERSE, 1.0);
     }
@@ -24,9 +24,6 @@ public class Intake {
      */
     public Intake(HardwareMap hardwareMap, DcMotorSimple.Direction direction,
                   double defaultPower) {
-        if (direction == null) {
-            throw new IllegalArgumentException("Intake direction must not be null");
-        }
         setDefaultPower(defaultPower);
         motor = hardwareMap.get(DcMotorEx.class, "intake");
         motor.setPower(0.0);
@@ -51,24 +48,16 @@ public class Intake {
     }
 
     /**
-     * Immediately applies signed power, clipped to [-1.0, 1.0].
+     * Passes signed power to the FTC SDK.
      * Positive intakes, negative reverses, and zero stops.
      */
     public void setPower(double power) {
-        if (Double.isNaN(power) || Double.isInfinite(power)) {
-            throw new IllegalArgumentException("Intake power must be finite");
-        }
-        double clippedPower = Math.max(-1.0, Math.min(1.0, power));
-        motor.setPower(clippedPower);
-        this.power = clippedPower;
+        motor.setPower(power);
+        this.power = power;
     }
 
     /** Changes the magnitude used by subsequent intake() and reverse() calls. */
     public void setDefaultPower(double defaultPower) {
-        if (Double.isNaN(defaultPower) || Double.isInfinite(defaultPower)
-                || defaultPower < 0.0 || defaultPower > 1.0) {
-            throw new IllegalArgumentException("Default intake power must be between 0.0 and 1.0");
-        }
         this.defaultPower = defaultPower;
     }
 

@@ -7,7 +7,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 import org.firstinspires.ftc.teamcode.sensors.BallColorCalibration;
 import org.firstinspires.ftc.teamcode.sensors.BallColorSensor;
 
-/** Mounted calibration and deadman-armed servo test; operates no motors or ball queue. */
+/** Mounted color sampling, explicit calibration saving, and hold-A servo testing. */
 @TeleOp(name = "TEST - Fast Color", group = "Testing")
 public class FastColorTest extends OpMode {
     // Preserve this test OpMode's presets; competition TeleOp has separate calibrated presets.

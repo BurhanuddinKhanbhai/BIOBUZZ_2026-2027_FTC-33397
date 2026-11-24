@@ -14,6 +14,8 @@ java_home = Path(os.environ.get('JAVA_HOME', '/Applications/Android Studio.app/C
 javac = str(java_home / 'bin/javac') if (java_home / 'bin/javac').exists() else shutil.which('javac')
 java = str(java_home / 'bin/java') if (java_home / 'bin/java').exists() else shutil.which('java')
 stubs = {
+    'com/bylazar/configurables/annotations/Configurable.java': '''package com.bylazar.configurables.annotations;
+public @interface Configurable {}''',
     'android/content/Context.java': '''package android.content;
 public class Context { private final java.io.File files; public Context(java.io.File f){files=f;}
 public java.io.File getFilesDir(){return files;} }''',
@@ -61,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='biobuzz-color-checks-') as directory:
         'sensors/BallColorCalibration.java', 'sensors/BallColorSensor.java',
         'subsystems/Shooter.java', 'subsystems/DriveTrain.java', 'subsystems/Intake.java',
         'subsystems/Transfer.java', 'subsystems/FlowerMechanism.java',
-        'robot/ShootingCoordinator.java', 'teleOp/Teleop.java', 'FastColorTest.java']]
+        'robot/ShootingCoordinator.java', 'teleOp/Teleop.java', 'FastColorTest.java', 'ServoCalibration.java']]
     # Keep host fixtures outside src/test/java: they intentionally use Android stand-ins,
     # and must not be mistaken for Android Gradle/JUnit tests.
     inputs.append(str(project / 'TeamCode/src/test/host/FastColorChecks.java'))

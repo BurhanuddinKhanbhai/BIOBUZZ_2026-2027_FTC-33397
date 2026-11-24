@@ -26,9 +26,6 @@ public class BallColorSensor {
 
         public ColorProfile(int minRed, int maxRed, int minGreen, int maxGreen,
                             int minBlue, int maxBlue) {
-            validateRange(minRed, maxRed);
-            validateRange(minGreen, maxGreen);
-            validateRange(minBlue, maxBlue);
             this.minRed = minRed;
             this.maxRed = maxRed;
             this.minGreen = minGreen;
@@ -43,11 +40,6 @@ public class BallColorSensor {
                     && blue >= minBlue && blue <= maxBlue;
         }
 
-        private static void validateRange(int min, int max) {
-            if (min < 0 || max < min) {
-                throw new IllegalArgumentException("Color bounds must be nonnegative with min <= max");
-            }
-        }
     }
 
     private final ColorSensor sensor;
@@ -84,10 +76,6 @@ public class BallColorSensor {
      * Supply a positive stability interval in seconds; no color calibration is assumed.
      */
     public BallColorSensor(HardwareMap hardwareMap, double stableTimeSeconds) {
-        if (hardwareMap == null) {
-            throw new IllegalArgumentException("Hardware map must not be null");
-        }
-        validateStableTime(stableTimeSeconds);
         this.stableTimeSeconds = stableTimeSeconds;
         normalizedMode = false;
         normalizedSensor = null;
@@ -105,7 +93,6 @@ public class BallColorSensor {
 
     /** Explicit dependencies for software tests. A missing sensor is allowed; no hardware reads in construction. */
     public BallColorSensor(NormalizedColorSensor sensor, File calibrationFile) {
-        if (calibrationFile == null) throw new IllegalArgumentException("Calibration file is required");
         this.sensor = null;
         normalizedMode = true;
         normalizedSensor = sensor;
@@ -115,9 +102,6 @@ public class BallColorSensor {
     }
 
     public void configureCalibration(BallColorCalibration calibration) {
-        if (!normalizedMode || calibration == null) {
-            throw new IllegalArgumentException("Normalized sensor and complete calibration required");
-        }
         this.calibration = calibration;
         calibrationStatus = "IN_MEMORY_UNSAVED";
         clearClassification(isAvailable() ? "NOT_UPDATED" : "MISSING");
@@ -134,7 +118,6 @@ public class BallColorSensor {
 
     /** Initialization/explicit action only; no file access occurs in update(). */
     public boolean loadCalibration() {
-        if (!normalizedMode) throw new IllegalStateException("Persistent references require normalized mode");
         clearCalibration();
         try {
             if (!calibrationFile.exists()) {
@@ -173,9 +156,6 @@ public class BallColorSensor {
      * Overlapping profile matches are always UNKNOWN. Zero RGB signal is always too weak.
      */
     public void configureCalibration(ColorProfile pollen, ColorProfile nectar, long minimumSignal) {
-        if (normalizedMode || pollen == null || nectar == null || minimumSignal < 0) {
-            throw new IllegalArgumentException("Both color profiles and a nonnegative signal threshold are required");
-        }
         pollenProfile = pollen;
         nectarProfile = nectar;
         this.minimumSignal = minimumSignal;
@@ -316,8 +296,6 @@ public class BallColorSensor {
 
     /** Legacy raw-profile timing only; normalized detection always uses two consecutive readings. */
     public void setStableTimeSeconds(double stableTimeSeconds) {
-        if (normalizedMode) throw new IllegalStateException("Normalized detection uses reading confirmation, not a time delay");
-        validateStableTime(stableTimeSeconds);
         if (this.stableTimeSeconds != stableTimeSeconds) {
             this.stableTimeSeconds = stableTimeSeconds;
             clearClassification(sensor == null ? "MISSING" : "NOT_UPDATED");
@@ -456,9 +434,4 @@ public class BallColorSensor {
         return isRedCalibrated() ? " (yellow / blue / red)" : " (yellow / blue; red UNCALIBRATED)";
     }
 
-    private static void validateStableTime(double seconds) {
-        if (Double.isNaN(seconds) || Double.isInfinite(seconds) || seconds <= 0.0) {
-            throw new IllegalArgumentException("Color stability time must be finite and positive");
-        }
-    }
 }
