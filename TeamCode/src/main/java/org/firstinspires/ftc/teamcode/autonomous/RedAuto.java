@@ -26,10 +26,10 @@ import java.util.function.LongSupplier;
 public class RedAuto extends OpMode {
     public static final class Settings {
         public double intake2Distance = 48.0;
-        public double pathPower = 0.25;
+        public double pathPower = 0.50;
         // Existing Pedro path-completion constraints, not additional OpMode watchdogs.
         public double positionTolerance = 1.0;
-        public double headingTolerance = Math.toRadians(3.0);
+        public double headingTolerance = Math.toRadians(5.0);
         public double stoppedSpeed = 1.0;
         public double endpointTimeoutMs = 11000.0;
         public double intakePower = 1.0;
