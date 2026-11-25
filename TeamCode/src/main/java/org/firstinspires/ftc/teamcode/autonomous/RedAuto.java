@@ -21,7 +21,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 
 import java.util.function.LongSupplier;
 
-/** Sixteen robot-relative steps. Pedro controls movement; feed bursts do not count ball exits. */
+/** Eighteen robot-relative steps. Pedro controls movement; feed bursts do not count ball exits. */
 @Autonomous(name = "BIOBUZZ - Red Auto", group = "Competition")
 public class RedAuto extends OpMode {
     public static final class Settings {
@@ -35,6 +35,7 @@ public class RedAuto extends OpMode {
         public double intakePower = 1.0;
         public double transferPower = 0.90;
         public double feedDurationSeconds = 4.0;
+        public double openingFeedSeconds = 2.0;
         public double flywheelTolerance = 75.0;
         public double flywheelStableSeconds = 0.25;
         public double pollenPosition = 0.10;
@@ -47,7 +48,7 @@ public class RedAuto extends OpMode {
         public double flowerSettlingSeconds = 1.0;
     }
 
-    private static final double POLLEN_TICKS_PER_SECOND = 1100.0;
+    private static final double POLLEN_TICKS_PER_SECOND = 1150.0;
     private static final double NECTAR_TICKS_PER_SECOND = 1200.0;
     private final Settings settings;
     private final LongSupplier clock;
@@ -202,7 +203,7 @@ public class RedAuto extends OpMode {
                     new PathConstraints(
                             0.995,
                             settings.stoppedSpeed,
-                            settings.positionTolerance,
+                            pathTolerance,
                             settings.headingTolerance,
                             settings.endpointTimeoutMs,
                             Constants.pathConstraints.getBrakingStrength(),
@@ -215,9 +216,21 @@ public class RedAuto extends OpMode {
                     target.getHeading()
             );
 
+
+            double drivePower;
+
+            if (step == RedAutoPlan.Step.INTAKE_1) {
+                drivePower = 0.50;
+            } else if (clearanceMove) {
+                drivePower = 0.35;
+            } else {
+                drivePower = settings.pathPower;
+            }
+
             follower.setMaxPower(
-                    Math.min(settings.pathPower, Constants.mecanumMaxPower)
+                    Math.min(drivePower, Constants.mecanumMaxPower)
             );
+
 
             follower.followPath(activePath, false);
 
@@ -249,8 +262,10 @@ public class RedAuto extends OpMode {
 
 
     private void updateShooting(long now) {
+        double duration = step == RedAutoPlan.Step.SHOOT_1
+                ? settings.openingFeedSeconds : settings.feedDurationSeconds;
         if (feeding) {
-            if (elapsed(now, feedStarted) >= settings.feedDurationSeconds) {
+            if (elapsed(now, feedStarted) >= duration) {
                 intake.stop();
                 transfer.stop();
                 shooter.stop();
@@ -258,7 +273,7 @@ public class RedAuto extends OpMode {
                 advance(now);
             } else {
                 feedStatus = String.format("FEEDING %.2f / %.2f s (%s)",
-                        elapsed(now, feedStarted), settings.feedDurationSeconds, feedingBall);
+                        elapsed(now, feedStarted), duration, feedingBall);
             }
             return;
         }
@@ -274,7 +289,7 @@ public class RedAuto extends OpMode {
             transfer.feed();
             feeding = true;
             feedStarted = now;
-            feedStatus = "FEEDING - both motors ON for 4 seconds";
+            feedStatus = "FEEDING - both motors ON for " + duration + " seconds";
         } else feedStatus = "WAITING FOR SPEED / BALL / SERVO";
     }
 
@@ -305,7 +320,7 @@ public class RedAuto extends OpMode {
 
     private void showTelemetry() {
         telemetry.addData("Auto", status);
-        telemetry.addData("State 1-16", step == null ? "NOT STARTED" : (step.ordinal() + 1) + "/16 " + step);
+        telemetry.addData("State 1-18", step == null ? "NOT STARTED" : (step.ordinal() + 1) + "/18 " + step);
         Pose pose = follower.getPose();
         telemetry.addData("Pedro X/Y/heading", poseText(pose));
         telemetry.addData("Target X/Y/heading", target == null ? "NOT STARTED" : poseText(target));

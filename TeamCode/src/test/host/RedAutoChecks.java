@@ -116,11 +116,27 @@ public final class RedAutoChecks {
     }
     private static void geometry() {
         RedAutoPlan p = new RedAutoPlan(48);
-        double[][] expected = {{0,0,0},{0,0,Math.PI/2},{0,48,Math.PI/2},
-                {0,-24,Math.PI/2},{0,-24,0},{120,-24,0},{120,-24,Math.PI},{120,-24,Math.PI},
-                {120,-24,Math.PI},{120,-24,0},{108,-24,0},{108,-12,0},{156,-12,0},
-                {144,-12,0},{144,-12,Math.PI},{144,-12,Math.PI}};
-        check(RedAutoPlan.Step.values().length == 16, "All 16 states");
+        double[][] expected = {
+                {0, 0, 0},
+                {2, 0, 0},
+                {2, 0, Math.PI/2},
+                {0, 0, Math.PI/2},
+                {0, 48, Math.PI/2},
+                {0, -24, Math.PI/2},
+                {0, -24, 0},
+                {120, -24, 0},
+                {120, -24, Math.PI},
+                {120, -24, Math.PI},
+                {120, -24, Math.PI},
+                {120, -24, 0},
+                {108, -24, 0},
+                {108, -12, 0},
+                {156, -12, 0},
+                {144, -12, 0},
+                {144, -12, Math.PI},
+                {144, -12, Math.PI}
+        };
+        check(RedAutoPlan.Step.values().length == 18, "All 18 states");
         for (RedAutoPlan.Step step : RedAutoPlan.Step.values()) {
             Pose t = p.getTarget(step); double[] e = expected[step.ordinal()];
             near(t.getX(),e[0]);near(t.getY(),e[1]);near(t.getHeading(),e[2]);
@@ -149,7 +165,11 @@ public final class RedAutoChecks {
             else near(f.motors.get("intake").power,0);
             if(!RedAutoPlan.isShoot(step)) near(f.motors.get("transfer").power,0);
             if(RedAutoPlan.isTurn(step)) near(f.follower().turnDelta,RedAutoPlan.turnRadians(step));
-            if(RedAutoPlan.isDrive(step)) near(((Path)field(f.auto,"activePath")).heading,((Pose)field(f.auto,"target")).getHeading());
+            if(RedAutoPlan.isDrive(step)) {
+                near(((Path)field(f.auto,"activePath")).heading,((Pose)field(f.auto,"target")).getHeading());
+                if(step==RedAutoPlan.Step.CLEAR_WALL_FORWARD || step==RedAutoPlan.Step.CLEAR_WALL_STRAFE)
+                    near(f.follower().power, .35);
+            }
             if(RedAutoPlan.isDrive(step) || RedAutoPlan.isTurn(step)) f.completeMotion();
             int updates=f.follower().updates, reads=BallColorSensor.instance.reads;
             f.tick();
@@ -161,11 +181,11 @@ public final class RedAutoChecks {
                 near(f.motors.get("flywheelA").velocity,speed);near(f.motors.get("flywheelB").velocity,speed);
                 near(f.adjust.position,step==RedAutoPlan.Step.SHOOT_2 ? .00 : .10);
             }
-            if(before && !after) near((f.clock.now-burstStart)/1e9,4.0);
+            if(before && !after) near((f.clock.now-burstStart)/1e9,step==RedAutoPlan.Step.SHOOT_1 ? 2.0 : 4.0);
         }
-        check(entered.equals(Arrays.asList(RedAutoPlan.Step.values())),"All 16 steps in exact order");
+        check(entered.equals(Arrays.asList(RedAutoPlan.Step.values())),"All 18 steps in exact order");
         check(bursts==3 && f.motors.get("transfer").nonzeroWrites==3,"Exactly three continuous feed bursts");
-        check(f.follower().pathCalls==7 && f.follower().turnCalls==5,"Seven Pedro paths and five Pedro turns");
+        check(f.follower().pathCalls==9 && f.follower().turnCalls==5,"Nine Pedro paths and five Pedro turns");
         check(f.auto.stopRequested && !f.running(),"Finishes and requests normal SDK stop");
         check(f.flower1.calls==1 && f.flower2.calls==1,"Flower command once per arm");
         near(f.flower1.position,.48);near(f.flower2.position,.48);f.allZero();
@@ -179,15 +199,21 @@ public final class RedAutoChecks {
         Shooter.instance.settled=true;f.tick();near(f.motors.get("transfer").power,.90);
         // Once started, retain the original first-ball preset/speed and continuous feed behavior.
         BallColorSensor.instance.type=BallColorSensor.BallType.NECTAR;Shooter.instance.ready=false;
-        f.clock.advance(2);f.auto.loop();near(f.motors.get("transfer").power,.90);near(f.motors.get("flywheelA").velocity,1100);
-        f.clock.advance(2);f.auto.loop();check(f.step()==RedAutoPlan.Step.TURN_LEFT_90,"Feed ends after four seconds despite loop gap");
+        f.clock.advance(2);f.auto.loop();
+        check(f.step()==RedAutoPlan.Step.CLEAR_WALL_FORWARD,"Opening feed ends after two seconds");
+        near(f.motors.get("transfer").power,0);
+        check(f.follower().pathCalls==1,"First clearance path begins after shooting");
+        near(f.follower().power,.35);
+        f.completeMotion();f.tick();check(f.step()==RedAutoPlan.Step.TURN_LEFT_90,"First clearance completes before turn");
         int turns=f.follower().turnCalls;
         f.clock.advance(40);f.auto.loop();
         check(f.running() && f.step()==RedAutoPlan.Step.TURN_LEFT_90 && f.follower().turnCalls==turns,
                 "No custom gap, deadline, turn watchdog or no-progress interruption");
-        f.follower().pose=new Pose(0,0,.1);f.tick();
+        f.follower().pose=new Pose(2,0,.1);f.tick();
         check(f.step()==RedAutoPlan.Step.TURN_LEFT_90,"Slight turn cannot advance while Pedro is busy");
-        f.completeMotion();f.tick();check(f.step()==RedAutoPlan.Step.INTAKE_1,"Pedro completion advances normally");
+        f.completeMotion();f.tick();check(f.step()==RedAutoPlan.Step.CLEAR_WALL_STRAFE,"Turn leads to strafe");
+        near(f.follower().power,.35);
+        f.completeMotion();f.tick();check(f.step()==RedAutoPlan.Step.INTAKE_1,"Second clearance leads to intake");
         f.auto.gamepad2.b=true;int updates=f.follower().updates;f.tick();
         check(!f.running() && f.auto.stopRequested && f.follower().updates==updates,"Operator abort precedes further movement");f.allZero();
         f=new Fixture(new RedAuto.Settings());f.init();f.auto.gamepad1.b=true;f.auto.start();
