@@ -26,7 +26,7 @@ import java.util.function.LongSupplier;
 public class RedAuto extends OpMode {
     public static final class Settings {
         public double intake2Distance = 48.0;
-        public double pathPower = 0.50;
+        public double pathPower = 1.0;
         // Existing Pedro path-completion constraints, not additional OpMode watchdogs.
         public double positionTolerance = 1.0;
         public double headingTolerance = Math.toRadians(5.0);
@@ -155,6 +155,7 @@ public class RedAuto extends OpMode {
         showTelemetry();
     }
 
+
     private void enter(RedAutoPlan.Step next, long now) {
         step = next;
         target = plan.getTarget(step);
@@ -162,47 +163,79 @@ public class RedAuto extends OpMode {
         activePath = null;
         feeding = false;
         status = "RUNNING";
-        if (step == RedAutoPlan.Step.INTAKE_1 || step == RedAutoPlan.Step.INTAKE_2) intake.intake();
-        else intake.stop();
+
+        if (step == RedAutoPlan.Step.INTAKE_1
+                || step == RedAutoPlan.Step.INTAKE_2) {
+            intake.intake();
+        } else {
+            intake.stop();
+        }
+
         transfer.stop();
         shooter.stop();
         feedStatus = "STOPPED";
 
         if (RedAutoPlan.isShoot(step)) {
+
             shooter.setAutoMode();
             feedingBall = BallColorSensor.BallType.UNKNOWN;
             feedStatus = "WAITING FOR SPEED / BALL / SERVO";
 
         } else if (RedAutoPlan.isDrive(step)) {
 
-            double distanceToTarget = Math.hypot(
-                    target.getX() - follower.getPose().getX(),
-                    target.getY() - follower.getPose().getY()
+            // Start driving from the robot's current position.
+            Pose from = follower.getPose();
+
+            activePath = new Path(
+                    new BezierLine(from, target),
+                    new PathConstraints(
+                            0.995,
+                            settings.stoppedSpeed,
+                            settings.positionTolerance,
+                            settings.headingTolerance,
+                            settings.endpointTimeoutMs,
+                            Constants.pathConstraints.getBrakingStrength(),
+                            Constants.pathConstraints.getBEZIER_CURVE_SEARCH_LIMIT(),
+                            Constants.pathConstraints.getBrakingStart()
+                    )
             );
 
-            boolean useFourInchTolerance =
-                    step == RedAutoPlan.Step.INTAKE_1
-                            || step == RedAutoPlan.Step.INTAKE_2
-                            || step == RedAutoPlan.Step.RETURN_1;
+            activePath.setConstantHeadingInterpolation(
+                    target.getHeading()
+            );
 
-            if ((useFourInchTolerance && distanceToTarget <= 4.0)
-                    || !follower.isBusy()) {
+            follower.setMaxPower(
+                    Math.min(settings.pathPower, Constants.mecanumMaxPower)
+            );
 
-                follower.breakFollowing();
-                advance(now);
-            }
-        }
-        else if (RedAutoPlan.isTurn(step)) {
-            follower.setMaxPower(Math.min(settings.pathPower, Constants.mecanumMaxPower));
+            follower.followPath(activePath, false);
+
+        } else if (RedAutoPlan.isTurn(step)) {
+
+            follower.setMaxPower(
+                    Math.min(settings.pathPower, Constants.mecanumMaxPower)
+            );
+
             double rotation = RedAutoPlan.turnRadians(step) > 0.0
-                    ? positiveAngle(target.getHeading() - follower.getPose().getHeading())
-                    : -positiveAngle(follower.getPose().getHeading() - target.getHeading());
+                    ? positiveAngle(
+                    target.getHeading()
+                    - follower.getPose().getHeading()
+            )
+                    : -positiveAngle(
+                    follower.getPose().getHeading()
+                    - target.getHeading()
+            );
+
             follower.turn(rotation);
+
         } else if (step == RedAutoPlan.Step.FLOWER_DOWN) {
+
             flower.lower();
             flower2.setPosition(settings.flower2Lowered);
+
         }
     }
+
 
     private void updateShooting(long now) {
         if (feeding) {
