@@ -25,11 +25,12 @@ public final class RedAutoPlan {
      */
     public enum Step {
         // STEP                 FORWARD   LEFT    TURN°   POWER  TOLERANCE  SECONDS
-        CLEAR_WALL_FORWARD   (   2.0,    0.0,     0.0,   0.35,      0.5,      0.0),
-        SHOOT_1              (   0.0,    0.0,     0.0,   0.00,      0.0,      2.0),
-        TURN_LEFT_90         (   -15.0,    -10.0,    180.0,   1.00,      5.0,      0.0),
-        CLEAR_WALL_STRAFE    (   0.0,    -48.0,     0.0,   0.50,      0.5,      0.0),
-        INTAKE_1             (  12.0,    0.0,    0.0,   0.35,      4.0,      0.0),
+
+        CLEAR_WALL_FORWARD (  4.0,   0.0,   0.0,  0.35,  0.5,  0.0),
+        SHOOT_1            (  0.0,   0.0,   0.0,  0.00,  0.0,  2.0),
+        TURN_LEFT_90       (  0.0,   0.0, 180.0,  1.00,  5.0,  0.0),
+        CLEAR_WALL_STRAFE  (-10.0, -47.0,   0.0,  1.0,  0.5,  0.0),
+        INTAKE_1           ( 19.0,   0.0,   0.0,  0.30,  4.0,  0.0),
         RETURN_1             ( -23.0,    0.0,     0.0,   1.00,      4.0,      0.0),
         TURN_RIGHT_90        (   0.0,    0.0,   -90.0,   1.00,      5.0,      0.0),
         DRIVE_TO_SHOOT_2     ( 110.0,    0.0,     0.0,   1.00,      1.0,      0.0),
