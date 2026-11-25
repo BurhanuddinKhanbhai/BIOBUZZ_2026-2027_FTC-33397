@@ -24,15 +24,12 @@ import java.util.function.LongSupplier;
 @Autonomous(name = "BIOBUZZ - Red Auto", group = "Competition")
 public class RedAuto extends OpMode {
     public static final class Settings {
-        public double pathPower = 1.0;
         public double positionTolerance = 1.0;
         public double headingTolerance = Math.toRadians(5.0);
         public double stoppedSpeed = 1.0;
         public double endpointTimeoutMs = 11000.0;
         public double intakePower = 1.0;
         public double transferPower = 0.90;
-        public double feedDurationSeconds = 4.0;
-        public double openingFeedSeconds = 2.0;
         public double flywheelTolerance = 75.0;
         public double flywheelStableSeconds = 0.25;
         public double pollenPosition = 0.10;
@@ -42,10 +39,9 @@ public class RedAuto extends OpMode {
         public double flower1Lowered = 0.48;
         public double flower2Lowered = 0.48;
         public Servo.Direction flower2Direction = Servo.Direction.REVERSE;
-        public double flowerSettlingSeconds = 1.0;
     }
 
-    private static final double POLLEN_TICKS_PER_SECOND = 1150.0;
+    private static final double POLLEN_TICKS_PER_SECOND = 1200.0;
     private final Settings settings;
     private final LongSupplier clock;
     private RedAutoPlan plan;
@@ -109,7 +105,7 @@ public class RedAuto extends OpMode {
                 double error = Math.atan2(
                         Math.sin(target.getHeading() - follower.getPose().getHeading()),
                         Math.cos(target.getHeading() - follower.getPose().getHeading()));
-                if (Math.abs(error) <= settings.headingTolerance) {
+                if (Math.abs(error) <= Math.toRadians(step.getFinishTolerance())) {
                     follower.breakFollowing();
                     driveTrain.stop();
                     advance(now);
@@ -122,21 +118,14 @@ public class RedAuto extends OpMode {
                     double distance = Math.hypot(
                             target.getX() - follower.getPose().getX(),
                             target.getY() - follower.getPose().getY());
-                    boolean shortMove = step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
-                            || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
-                    double tolerance = shortMove ? 0.5
-                            : (step == RedAutoPlan.Step.INTAKE_1
-                                    || step == RedAutoPlan.Step.RETURN_1
-                                    || step == RedAutoPlan.Step.INTAKE_FLOWER)
-                                    ? 4.0 : settings.positionTolerance;
-                    if (distance <= tolerance) {
+                    if (distance <= step.getFinishTolerance()) {
                         follower.breakFollowing();
                         advance(now);
                     }
                 }
             } else if (RedAutoPlan.isShoot(step)) {
                 updateShooting(now);
-            } else if (elapsed(now, stepStarted) >= settings.flowerSettlingSeconds) {
+            } else if (elapsed(now, stepStarted) >= step.getDurationSeconds()) {
                 advance(now);
             }
         }
@@ -168,9 +157,10 @@ public class RedAuto extends OpMode {
             if (plan.isZeroDistanceDrive(step)) return;
 
             Pose from = follower.getPose();
-            boolean clearanceMove = step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
-                    || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
-            double pathTolerance = clearanceMove ? 0.5 : settings.positionTolerance;
+            // Pedro's path constraint stays at the original global setting (1 inch),
+            // except for clearance moves that require a tighter finish tolerance.
+            double pathTolerance = Math.min(settings.positionTolerance,
+                    step.getFinishTolerance());
             activePath = new Path(new BezierLine(from, target), new PathConstraints(
                     0.995, settings.stoppedSpeed, pathTolerance,
                     settings.headingTolerance, settings.endpointTimeoutMs,
@@ -179,13 +169,10 @@ public class RedAuto extends OpMode {
                     Constants.pathConstraints.getBrakingStart()));
             activePath.setConstantHeadingInterpolation(target.getHeading());
 
-            double drivePower = clearanceMove ? 0.35
-                    : (step == RedAutoPlan.Step.INTAKE_1
-                            || step == RedAutoPlan.Step.INTAKE_FLOWER) ? 0.50 : settings.pathPower;
-            follower.setMaxPower(Math.min(drivePower, Constants.mecanumMaxPower));
+            follower.setMaxPower(Math.min(step.getMaxPower(), Constants.mecanumMaxPower));
             follower.followPath(activePath, false);
         } else if (RedAutoPlan.isTurn(step)) {
-            follower.setMaxPower(Math.min(settings.pathPower, Constants.mecanumMaxPower));
+            follower.setMaxPower(Math.min(step.getMaxPower(), Constants.mecanumMaxPower));
             double rotation = RedAutoPlan.turnRadians(step) > 0.0
                     ? positiveAngle(target.getHeading() - follower.getPose().getHeading())
                     : -positiveAngle(follower.getPose().getHeading() - target.getHeading());
@@ -197,8 +184,7 @@ public class RedAuto extends OpMode {
     }
 
     private void updateShooting(long now) {
-        double duration = step == RedAutoPlan.Step.SHOOT_1
-                ? settings.openingFeedSeconds : settings.feedDurationSeconds;
+        double duration = step.getDurationSeconds();
         if (feeding) {
             if (elapsed(now, feedStarted) >= duration) {
                 intake.stop();
