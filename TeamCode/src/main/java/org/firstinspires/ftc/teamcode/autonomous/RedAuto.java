@@ -190,6 +190,13 @@ public class RedAuto extends OpMode {
             // Start driving from the robot's current position.
             Pose from = follower.getPose();
 
+            boolean clearanceMove =
+                    step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
+                            || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
+
+            double pathTolerance = clearanceMove
+                    ? 0.5 : settings.positionTolerance;
+
             activePath = new Path(
                     new BezierLine(from, target),
                     new PathConstraints(

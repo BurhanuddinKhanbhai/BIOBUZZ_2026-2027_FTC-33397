@@ -16,13 +16,12 @@ import com.pedropathing.geometry.Pose;
 public final class RedAutoPlan {
 
     public enum Step {
-        public enum Step {
-            SHOOT_1,
-            CLEAR_WALL_FORWARD,
-            TURN_LEFT_90,
-            CLEAR_WALL_STRAFE,
-            INTAKE_1,
-            RETURN_1,
+        SHOOT_1,
+        CLEAR_WALL_FORWARD,
+        TURN_LEFT_90,
+        CLEAR_WALL_STRAFE,
+        INTAKE_1,
+        RETURN_1,
         TURN_RIGHT_90,
         DRIVE_TO_SHOOT_2,
         TURN_180_1,
