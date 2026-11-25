@@ -35,9 +35,9 @@ public class RedAuto extends OpMode {
         public double pollenPosition = 0.10;
         public double nectarPosition = 0.00;
         public double adjustmentSettlingSeconds = 0.05;
-        public double flower1Raised = 0.225;
-        public double flower1Lowered = 0.48;
-        public double flower2Lowered = 0.48;
+        public double flower1Raised = 0.2;
+        public double flower1Lowered = 0.4;
+        public double flower2Lowered = 0.4;
         public Servo.Direction flower2Direction = Servo.Direction.REVERSE;
     }
 
@@ -110,19 +110,53 @@ public class RedAuto extends OpMode {
                     driveTrain.stop();
                     advance(now);
                 }
+
             } else if (RedAutoPlan.isDrive(step)) {
-                // Placeholder movements (0 forward, 0 sideways) have no Pedro path.
-                if (activePath == null) {
+
+                if (step == RedAutoPlan.Step.INTAKE_FLOWER) {
+
+                    boolean intakeTimeComplete =
+                            elapsed(now, stepStarted) >= step.getDurationSeconds();
+
+                    if (intakeTimeComplete) {
+                        intake.stop();
+                    }
+
+                    if (activePath != null) {
+                        double distance = Math.hypot(
+                                target.getX() - follower.getPose().getX(),
+                                target.getY() - follower.getPose().getY()
+                        );
+
+                        if (distance <= step.getFinishTolerance()) {
+                            follower.breakFollowing();
+                            driveTrain.stop();
+                            activePath = null;
+                        }
+                    }
+
+                    if (activePath == null && intakeTimeComplete) {
+                        advance(now);
+                    }
+
+                } else if (activePath == null) {
+
                     advance(now);
+
                 } else {
+
                     double distance = Math.hypot(
                             target.getX() - follower.getPose().getX(),
-                            target.getY() - follower.getPose().getY());
+                            target.getY() - follower.getPose().getY()
+                    );
+
                     if (distance <= step.getFinishTolerance()) {
                         follower.breakFollowing();
                         advance(now);
                     }
                 }
+
+
             } else if (RedAutoPlan.isShoot(step)) {
                 updateShooting(now);
             } else if (elapsed(now, stepStarted) >= step.getDurationSeconds()) {
@@ -209,15 +243,17 @@ public class RedAuto extends OpMode {
         }
     }
 
+
     private void advance(long now) {
-        if (step == RedAutoPlan.Step.PARK_FORWARD) {
+        if (step == RedAutoPlan.Step.PARK_BACKWARD) {
             stop();
-            status = "COMPLETE - parked (placeholder distance may still be zero)";
+            status = "COMPLETE - parked";
             requestOpModeStop();
         } else {
             enter(RedAutoPlan.Step.values()[step.ordinal() + 1], now);
         }
     }
+
 
     @Override public void stop() {
         running = feeding = false;

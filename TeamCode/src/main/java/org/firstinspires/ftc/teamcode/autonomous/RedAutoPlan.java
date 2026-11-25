@@ -29,20 +29,21 @@ public final class RedAutoPlan {
         CLEAR_WALL_FORWARD (  4.0,   0.0,   0.0,  0.35,  0.5,  0.0),
         SHOOT_1            (  0.0,   0.0,   0.0,  0.00,  0.0,  2.0),
         TURN_LEFT_90       (  0.0,   0.0, 180.0,  1.00,  5.0,  0.0),
-        CLEAR_WALL_STRAFE  (-10.0, -47.0,   0.0,  1.0,  0.5,  0.0),
+        CLEAR_WALL_STRAFE  (-10.0, -46.0,   0.0,  1.0,  0.5,  0.0),
         INTAKE_1           ( 19.0,   0.0,   0.0,  0.30,  4.0,  0.0),
-        RETURN_1             ( -23.0,    0.0,     0.0,   1.00,      4.0,      0.0),
-        TURN_RIGHT_90        (   0.0,    0.0,   -90.0,   1.00,      5.0,      0.0),
-        DRIVE_TO_SHOOT_2     ( 110.0,    0.0,     0.0,   1.00,      1.0,      0.0),
-        TURN_RIGHT_70_1      (   0.0,    0.0,   -140.0,   1.00,      5.0,      0.0),
-        SHOOT_2              (   0.0,    0.0,     0.0,   0.00,      0.0,      4.0),
-        FLOWER_DOWN          (   0.0,    0.0,     0.0,   0.00,      0.0,      1.0),
-        TURN_LEFT_70         (   0.0,    0.0,    70.0,   1.00,      5.0,      0.0),
-        INTAKE_FLOWER        (   0.0,    0.0,     0.0,   0.50,      4.0,      0.0),
-        TURN_RIGHT_70_2      (   0.0,    0.0,   -70.0,   1.00,      5.0,      0.0),
-        SHOOT_3              (   0.0,    0.0,     0.0,   0.00,      0.0,      4.0),
-        TURN_RIGHT_200       (   0.0,    0.0,  -200.0,   1.00,      5.0,      0.0),
-        PARK_FORWARD         (   0.0,    0.0,     0.0,   1.00,      1.0,      0.0);
+        RETURN_1          (-15.0, 24.0,    0.0, 1.00, 4.0, 0.0),
+        TURN_RIGHT_90     (  0.0,   0.0,  180.0, 1.00, 5.0, 0.0),
+        DRIVE_TO_SHOOT_2  (108.0,   0.0,    0.0, 1.00, 1.0, 0.0),
+        TURN_RIGHT_70_1   (  0.0,   0.0, -150.0, 1.00, 5.0, 0.0),
+        SHOOT_2           (  0.0,   0.0,    0.0, 0.00, 0.0, 4.0),
+
+        FLOWER_DOWN        (  0.0, 0.0,    0.0, 0.00, 0.0, 1.0),
+        TURN_TO_ZERO       (  0.0, 0.0,  150.0, 1.00, 5.0, 0.0),
+        INTAKE_FLOWER      (  2.0, 0.0,    0.0, 0.50, 0.5, 3.0),
+        RETURN_FROM_FLOWER ( -2.0, 0.0,    0.0, 0.35, 0.5, 0.0),
+        TURN_RIGHT_150_2   (  0.0, 0.0, -150.0, 1.00, 5.0, 0.0),
+        SHOOT_3            (  0.0, 0.0,    0.0, 0.00, 0.0, 4.0),
+        PARK_BACKWARD      (-15.0, 0.0,    0.0, 1.00, 1.0, 0.0);
 
         private final double forwardInches;
         private final double leftInches;
@@ -96,6 +97,7 @@ public final class RedAutoPlan {
                 current.getY() - previous.getY()) < 1e-8;
     }
 
+
     public static boolean isDrive(Step step) {
         return step == Step.CLEAR_WALL_FORWARD
                 || step == Step.CLEAR_WALL_STRAFE
@@ -103,17 +105,19 @@ public final class RedAutoPlan {
                 || step == Step.RETURN_1
                 || step == Step.DRIVE_TO_SHOOT_2
                 || step == Step.INTAKE_FLOWER
-                || step == Step.PARK_FORWARD;
+                || step == Step.RETURN_FROM_FLOWER
+                || step == Step.PARK_BACKWARD;
     }
+
 
     public static boolean isTurn(Step step) {
         return step == Step.TURN_LEFT_90
                 || step == Step.TURN_RIGHT_90
                 || step == Step.TURN_RIGHT_70_1
-                || step == Step.TURN_LEFT_70
-                || step == Step.TURN_RIGHT_70_2
-                || step == Step.TURN_RIGHT_200;
+                || step == Step.TURN_TO_ZERO
+                || step == Step.TURN_RIGHT_150_2;
     }
+
 
     public static boolean isShoot(Step step) {
         return step == Step.SHOOT_1 || step == Step.SHOOT_2 || step == Step.SHOOT_3;
