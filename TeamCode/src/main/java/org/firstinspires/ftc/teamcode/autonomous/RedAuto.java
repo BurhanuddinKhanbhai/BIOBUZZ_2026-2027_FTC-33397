@@ -12,7 +12,6 @@ import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-
 import org.firstinspires.ftc.teamcode.subsystems.DriveTrain;
 import org.firstinspires.ftc.teamcode.subsystems.FlowerMechanism;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
@@ -21,13 +20,11 @@ import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 
 import java.util.function.LongSupplier;
 
-/** Eighteen robot-relative steps. Pedro controls movement; feed bursts do not count ball exits. */
+/** Seventeen robot-relative autonomous steps, including editable zero-distance placeholders. */
 @Autonomous(name = "BIOBUZZ - Red Auto", group = "Competition")
 public class RedAuto extends OpMode {
     public static final class Settings {
-        public double intake2Distance = 48.0;
         public double pathPower = 1.0;
-        // Existing Pedro path-completion constraints, not additional OpMode watchdogs.
         public double positionTolerance = 1.0;
         public double headingTolerance = Math.toRadians(5.0);
         public double stoppedSpeed = 1.0;
@@ -49,32 +46,32 @@ public class RedAuto extends OpMode {
     }
 
     private static final double POLLEN_TICKS_PER_SECOND = 1150.0;
-    private static final double NECTAR_TICKS_PER_SECOND = 1200.0;
     private final Settings settings;
     private final LongSupplier clock;
     private RedAutoPlan plan;
     private RedAutoPlan.Step step;
     private Follower follower;
-    private DriveTrain driveTrain; // Initializes motor modes/directions before Pedro takes over.
+    private DriveTrain driveTrain;
     private Intake intake;
     private Transfer transfer;
     private Shooter shooter;
     private FlowerMechanism flower;
     private Servo flower2;
-
     private Path activePath;
     private Pose target;
     private boolean running, feeding;
     private long stepStarted, feedStarted;
-
     private String status = "INITIALIZING";
     private String feedStatus = "STOPPED";
 
     public RedAuto() { this(new Settings(), System::nanoTime); }
-    RedAuto(Settings settings, LongSupplier clock) { this.settings = settings; this.clock = clock; }
+    RedAuto(Settings settings, LongSupplier clock) {
+        this.settings = settings;
+        this.clock = clock;
+    }
 
     @Override public void init() {
-        plan = new RedAutoPlan(settings.intake2Distance);
+        plan = new RedAutoPlan();
         driveTrain = new DriveTrain(hardwareMap);
         intake = new Intake(hardwareMap, DcMotorSimple.Direction.REVERSE, settings.intakePower);
         transfer = new Transfer(hardwareMap, DcMotorSimple.Direction.REVERSE, settings.transferPower);
@@ -87,7 +84,6 @@ public class RedAuto extends OpMode {
         flower.configurePositions(settings.flower1Raised, settings.flower1Lowered);
         flower2 = hardwareMap.get(Servo.class, "flowerServo2");
         flower2.setDirection(settings.flower2Direction);
-
         follower = Constants.createFollower(hardwareMap);
         follower.setStartingPose(plan.getStart());
         status = "READY";
@@ -98,9 +94,9 @@ public class RedAuto extends OpMode {
 
     @Override public void start() {
         if (gamepad1.b || gamepad2.b) { stop(); requestOpModeStop(); return; }
-        follower.setStartingPose(plan.getStart()); // Software count baseline, no encoder reset.
+        follower.setStartingPose(plan.getStart());
         running = true;
-        enter(RedAutoPlan.Step.SHOOT_1, clock.getAsLong());
+        enter(RedAutoPlan.Step.CLEAR_WALL_FORWARD, clock.getAsLong());
     }
 
     @Override public void loop() {
@@ -109,49 +105,36 @@ public class RedAuto extends OpMode {
             long now = clock.getAsLong();
             follower.update();
 
-
             if (RedAutoPlan.isTurn(step)) {
-
-                // Calculate how far the robot is from its target heading.
-                double headingError = Math.atan2(
+                double error = Math.atan2(
                         Math.sin(target.getHeading() - follower.getPose().getHeading()),
-                        Math.cos(target.getHeading() - follower.getPose().getHeading())
-                );
-
-                // Finish the turn once it is within 5 degrees.
-                if (Math.abs(headingError) <= settings.headingTolerance) {
+                        Math.cos(target.getHeading() - follower.getPose().getHeading()));
+                if (Math.abs(error) <= settings.headingTolerance) {
                     follower.breakFollowing();
                     driveTrain.stop();
                     advance(now);
                 }
-
-
-
             } else if (RedAutoPlan.isDrive(step)) {
-
-                double distanceToTarget = Math.hypot(
-                        target.getX() - follower.getPose().getX(),
-                        target.getY() - follower.getPose().getY()
-                );
-
-                boolean clearanceMove =
-                        step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
-                                || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
-
-                double tolerance = clearanceMove ? 0.5 :
-                        (step == RedAutoPlan.Step.INTAKE_1
-                                || step == RedAutoPlan.Step.INTAKE_2
-                                || step == RedAutoPlan.Step.RETURN_1)
-                        ? 4.0 : settings.positionTolerance;
-
-                if (distanceToTarget <= tolerance) {
-                    follower.breakFollowing();
+                // Placeholder movements (0 forward, 0 sideways) have no Pedro path.
+                if (activePath == null) {
                     advance(now);
+                } else {
+                    double distance = Math.hypot(
+                            target.getX() - follower.getPose().getX(),
+                            target.getY() - follower.getPose().getY());
+                    boolean shortMove = step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
+                            || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
+                    double tolerance = shortMove ? 0.5
+                            : (step == RedAutoPlan.Step.INTAKE_1
+                                    || step == RedAutoPlan.Step.RETURN_1
+                                    || step == RedAutoPlan.Step.INTAKE_FLOWER)
+                                    ? 4.0 : settings.positionTolerance;
+                    if (distance <= tolerance) {
+                        follower.breakFollowing();
+                        advance(now);
+                    }
                 }
-            }
-
-
-            else if (RedAutoPlan.isShoot(step)) {
+            } else if (RedAutoPlan.isShoot(step)) {
                 updateShooting(now);
             } else if (elapsed(now, stepStarted) >= settings.flowerSettlingSeconds) {
                 advance(now);
@@ -159,7 +142,6 @@ public class RedAuto extends OpMode {
         }
         showTelemetry();
     }
-
 
     private void enter(RedAutoPlan.Step next, long now) {
         step = next;
@@ -169,13 +151,10 @@ public class RedAuto extends OpMode {
         feeding = false;
         status = "RUNNING";
 
-        if (step == RedAutoPlan.Step.INTAKE_1
-                || step == RedAutoPlan.Step.INTAKE_2) {
-            intake.intake();
-        } else {
-            intake.stop();
-        }
-
+        boolean intakeStep = step == RedAutoPlan.Step.INTAKE_1
+                || (step == RedAutoPlan.Step.INTAKE_FLOWER && !plan.isZeroDistanceDrive(step));
+        if (intakeStep) intake.intake();
+        else intake.stop();
         transfer.stop();
         shooter.stop();
         feedStatus = "STOPPED";
@@ -185,105 +164,57 @@ public class RedAuto extends OpMode {
             shooter.setTargetVelocity(POLLEN_TICKS_PER_SECOND);
             feedStatus = "WAITING FOR FLYWHEEL / SERVO";
         } else if (RedAutoPlan.isDrive(step)) {
+            // Avoid constructing or following a zero-length Pedro path.
+            if (plan.isZeroDistanceDrive(step)) return;
 
-            // Start driving from the robot's current position.
             Pose from = follower.getPose();
+            boolean clearanceMove = step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
+                    || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
+            double pathTolerance = clearanceMove ? 0.5 : settings.positionTolerance;
+            activePath = new Path(new BezierLine(from, target), new PathConstraints(
+                    0.995, settings.stoppedSpeed, pathTolerance,
+                    settings.headingTolerance, settings.endpointTimeoutMs,
+                    Constants.pathConstraints.getBrakingStrength(),
+                    Constants.pathConstraints.getBEZIER_CURVE_SEARCH_LIMIT(),
+                    Constants.pathConstraints.getBrakingStart()));
+            activePath.setConstantHeadingInterpolation(target.getHeading());
 
-            boolean clearanceMove =
-                    step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
-                            || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
-
-            double pathTolerance = clearanceMove
-                    ? 0.5 : settings.positionTolerance;
-
-            activePath = new Path(
-                    new BezierLine(from, target),
-                    new PathConstraints(
-                            0.995,
-                            settings.stoppedSpeed,
-                            pathTolerance,
-                            settings.headingTolerance,
-                            settings.endpointTimeoutMs,
-                            Constants.pathConstraints.getBrakingStrength(),
-                            Constants.pathConstraints.getBEZIER_CURVE_SEARCH_LIMIT(),
-                            Constants.pathConstraints.getBrakingStart()
-                    )
-            );
-
-            activePath.setConstantHeadingInterpolation(
-                    target.getHeading()
-            );
-
-
-            double drivePower;
-
-            if (step == RedAutoPlan.Step.INTAKE_1) {
-                drivePower = 0.50;
-            } else if (clearanceMove) {
-                drivePower = 0.35;
-            } else {
-                drivePower = settings.pathPower;
-            }
-
-            follower.setMaxPower(
-                    Math.min(drivePower, Constants.mecanumMaxPower)
-            );
-
-
+            double drivePower = clearanceMove ? 0.35
+                    : (step == RedAutoPlan.Step.INTAKE_1
+                            || step == RedAutoPlan.Step.INTAKE_FLOWER) ? 0.50 : settings.pathPower;
+            follower.setMaxPower(Math.min(drivePower, Constants.mecanumMaxPower));
             follower.followPath(activePath, false);
-
         } else if (RedAutoPlan.isTurn(step)) {
-
-            follower.setMaxPower(
-                    Math.min(settings.pathPower, Constants.mecanumMaxPower)
-            );
-
+            follower.setMaxPower(Math.min(settings.pathPower, Constants.mecanumMaxPower));
             double rotation = RedAutoPlan.turnRadians(step) > 0.0
-                    ? positiveAngle(
-                    target.getHeading()
-                    - follower.getPose().getHeading()
-            )
-                    : -positiveAngle(
-                    follower.getPose().getHeading()
-                    - target.getHeading()
-            );
-
+                    ? positiveAngle(target.getHeading() - follower.getPose().getHeading())
+                    : -positiveAngle(follower.getPose().getHeading() - target.getHeading());
             follower.turn(rotation);
-
         } else if (step == RedAutoPlan.Step.FLOWER_DOWN) {
-
             flower.lower();
             flower2.setPosition(settings.flower2Lowered);
-
         }
     }
 
-
-
     private void updateShooting(long now) {
-
+        double duration = step == RedAutoPlan.Step.SHOOT_1
+                ? settings.openingFeedSeconds : settings.feedDurationSeconds;
         if (feeding) {
-            if (elapsed(now, feedStarted) >= settings.feedDurationSeconds) {
+            if (elapsed(now, feedStarted) >= duration) {
                 intake.stop();
                 transfer.stop();
                 shooter.stop();
-
                 feeding = false;
                 advance(now);
             } else {
-                feedStatus = String.format(
-                        "FEEDING %.2f / %.2f s (POLLEN)",
-                        elapsed(now, feedStarted),
-                        settings.feedDurationSeconds
-                );
+                feedStatus = String.format("FEEDING %.2f / %.2f s (POLLEN)",
+                        elapsed(now, feedStarted), duration);
             }
             return;
         }
-
         if (shooter.isReadyToFeed()) {
             intake.intake();
             transfer.feed();
-
             feeding = true;
             feedStarted = now;
             feedStatus = "FEEDING POLLEN";
@@ -292,20 +223,20 @@ public class RedAuto extends OpMode {
         }
     }
 
-
     private void advance(long now) {
-        if (step == RedAutoPlan.Step.SHOOT_3) {
+        if (step == RedAutoPlan.Step.PARK_FORWARD) {
             stop();
-            status = "COMPLETE - three feed bursts ended; ball count not measured";
+            status = "COMPLETE - parked (placeholder distance may still be zero)";
             requestOpModeStop();
-        } else enter(RedAutoPlan.Step.values()[step.ordinal() + 1], now);
+        } else {
+            enter(RedAutoPlan.Step.values()[step.ordinal() + 1], now);
+        }
     }
 
     @Override public void stop() {
         running = feeding = false;
         status = "STOPPED";
         feedStatus = "STOPPED";
-        // STOP remains independent across devices; one failed write must not skip other motors.
         stopDevice("Pedro", () -> { if (follower != null) follower.breakFollowing(); });
         stopDevice("drivetrain", () -> { if (driveTrain != null) driveTrain.stop(); });
         stopDevice("intake", () -> { if (intake != null) intake.stop(); });
@@ -320,26 +251,31 @@ public class RedAuto extends OpMode {
 
     private void showTelemetry() {
         telemetry.addData("Auto", status);
-        telemetry.addData("State 1-18", step == null ? "NOT STARTED" : (step.ordinal() + 1) + "/18 " + step);
+        telemetry.addData("State 1-17", step == null ? "NOT STARTED" : (step.ordinal() + 1) + "/17 " + step);
         Pose pose = follower.getPose();
         telemetry.addData("Pedro X/Y/heading", poseText(pose));
         telemetry.addData("Target X/Y/heading", target == null ? "NOT STARTED" : poseText(target));
         telemetry.addData("Heading error (degrees)", target == null ? 0.0 : Math.toDegrees(Math.atan2(
-                Math.sin(target.getHeading() - pose.getHeading()), Math.cos(target.getHeading() - pose.getHeading()))));
+                Math.sin(target.getHeading() - pose.getHeading()),
+                Math.cos(target.getHeading() - pose.getHeading()))));
         telemetry.addData("Follower", follower.isBusy() ? "BUSY" : "IDLE");
-        telemetry.addData("Path progress t", activePath == null ? "N/A (turn/action)" : activePath.getClosestPointTValue());
+        telemetry.addData("Path progress t", activePath == null ? "N/A (turn/action/placeholder)"
+                : activePath.getClosestPointTValue());
         telemetry.addData("Flywheel A/B ticks/s", "%.1f / %.1f", shooter.getVelocityA(), shooter.getVelocityB());
         telemetry.addData("Flywheel target / at speed", "%.0f / %s", shooter.getTargetVelocity(), shooter.isAtSpeed());
         telemetry.addData("Intake / transfer", intake.getState() + " / " + transfer.getState());
         telemetry.addData("Feed", feedStatus);
         telemetry.addData("Flower", flower.getState());
-
-        telemetry.addLine("B on either gamepad stops autonomous. Feed duration is not a ball count.");
+        telemetry.addLine("B on either gamepad stops autonomous; zero-distance placeholders are skipped.");
         telemetry.update();
     }
 
     private static double elapsed(long now, long start) { return (now - start) / 1_000_000_000.0; }
-    private static double positiveAngle(double angle) { return (angle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI); }
-    private static String poseText(Pose pose) { return String.format("%.2f / %.2f / %.1f deg",
-            pose.getX(), pose.getY(), Math.toDegrees(pose.getHeading())); }
+    private static double positiveAngle(double angle) {
+        return (angle % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    }
+    private static String poseText(Pose pose) {
+        return String.format("%.2f / %.2f / %.1f deg",
+                pose.getX(), pose.getY(), Math.toDegrees(pose.getHeading()));
+    }
 }
