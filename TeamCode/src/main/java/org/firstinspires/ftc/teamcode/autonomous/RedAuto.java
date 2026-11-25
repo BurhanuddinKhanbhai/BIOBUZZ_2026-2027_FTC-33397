@@ -12,7 +12,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-import org.firstinspires.ftc.teamcode.sensors.BallColorSensor;
+
 import org.firstinspires.ftc.teamcode.subsystems.DriveTrain;
 import org.firstinspires.ftc.teamcode.subsystems.FlowerMechanism;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
@@ -61,12 +61,12 @@ public class RedAuto extends OpMode {
     private Shooter shooter;
     private FlowerMechanism flower;
     private Servo flower2;
-    private BallColorSensor color;
+
     private Path activePath;
     private Pose target;
     private boolean running, feeding;
     private long stepStarted, feedStarted;
-    private BallColorSensor.BallType feedingBall = BallColorSensor.BallType.UNKNOWN;
+
     private String status = "INITIALIZING";
     private String feedStatus = "STOPPED";
 
@@ -87,7 +87,7 @@ public class RedAuto extends OpMode {
         flower.configurePositions(settings.flower1Raised, settings.flower1Lowered);
         flower2 = hardwareMap.get(Servo.class, "flowerServo2");
         flower2.setDirection(settings.flower2Direction);
-        color = new BallColorSensor(hardwareMap);
+
         follower = Constants.createFollower(hardwareMap);
         follower.setStartingPose(plan.getStart());
         status = "READY";
@@ -108,7 +108,7 @@ public class RedAuto extends OpMode {
             if (gamepad1.b || gamepad2.b) { stop(); requestOpModeStop(); return; }
             long now = clock.getAsLong();
             follower.update();
-            color.update();
+
 
             if (RedAutoPlan.isTurn(step)) {
 
@@ -181,11 +181,9 @@ public class RedAuto extends OpMode {
         feedStatus = "STOPPED";
 
         if (RedAutoPlan.isShoot(step)) {
-
-            shooter.setAutoMode();
-            feedingBall = BallColorSensor.BallType.UNKNOWN;
-            feedStatus = "WAITING FOR SPEED / BALL / SERVO";
-
+            shooter.setPollenMode();
+            shooter.setTargetVelocity(POLLEN_TICKS_PER_SECOND);
+            feedStatus = "WAITING FOR FLYWHEEL / SERVO";
         } else if (RedAutoPlan.isDrive(step)) {
 
             // Start driving from the robot's current position.
@@ -261,37 +259,39 @@ public class RedAuto extends OpMode {
     }
 
 
+
     private void updateShooting(long now) {
-        double duration = step == RedAutoPlan.Step.SHOOT_1
-                ? settings.openingFeedSeconds : settings.feedDurationSeconds;
+
         if (feeding) {
-            if (elapsed(now, feedStarted) >= duration) {
+            if (elapsed(now, feedStarted) >= settings.feedDurationSeconds) {
                 intake.stop();
                 transfer.stop();
                 shooter.stop();
+
                 feeding = false;
                 advance(now);
             } else {
-                feedStatus = String.format("FEEDING %.2f / %.2f s (%s)",
-                        elapsed(now, feedStarted), duration, feedingBall);
+                feedStatus = String.format(
+                        "FEEDING %.2f / %.2f s (POLLEN)",
+                        elapsed(now, feedStarted),
+                        settings.feedDurationSeconds
+                );
             }
             return;
         }
-        BallColorSensor.BallType detected = color.getBallType();
-        if (detected == BallColorSensor.BallType.POLLEN) shooter.setTargetVelocity(POLLEN_TICKS_PER_SECOND);
-        else if (detected == BallColorSensor.BallType.NECTAR) shooter.setTargetVelocity(NECTAR_TICKS_PER_SECOND);
-        shooter.update(detected);
+
         if (shooter.isReadyToFeed()) {
-            // Preserve the first identified ball's speed/adjustment throughout the continuous burst.
-            feedingBall = detected;
-            shooter.setSelectionMode(Shooter.SelectionMode.MANUAL);
             intake.intake();
             transfer.feed();
+
             feeding = true;
             feedStarted = now;
-            feedStatus = "FEEDING - both motors ON for " + duration + " seconds";
-        } else feedStatus = "WAITING FOR SPEED / BALL / SERVO";
+            feedStatus = "FEEDING POLLEN";
+        } else {
+            feedStatus = "WAITING FOR FLYWHEEL / SERVO";
+        }
     }
+
 
     private void advance(long now) {
         if (step == RedAutoPlan.Step.SHOOT_3) {
@@ -333,8 +333,7 @@ public class RedAuto extends OpMode {
         telemetry.addData("Intake / transfer", intake.getState() + " / " + transfer.getState());
         telemetry.addData("Feed", feedStatus);
         telemetry.addData("Flower", flower.getState());
-        telemetry.addData("Color", color.getBallType() + " / " + color.getStatus());
-        telemetry.addData("Color calibration", color.getCalibrationStatus());
+
         telemetry.addLine("B on either gamepad stops autonomous. Feed duration is not a ball count.");
         telemetry.update();
     }
