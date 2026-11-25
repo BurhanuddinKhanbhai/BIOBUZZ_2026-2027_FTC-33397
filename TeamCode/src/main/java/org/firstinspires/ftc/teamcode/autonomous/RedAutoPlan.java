@@ -16,10 +16,13 @@ import com.pedropathing.geometry.Pose;
 public final class RedAutoPlan {
 
     public enum Step {
-        SHOOT_1,
-        TURN_LEFT_90,
-        INTAKE_1,
-        RETURN_1,
+        public enum Step {
+            SHOOT_1,
+            CLEAR_WALL_FORWARD,
+            TURN_LEFT_90,
+            CLEAR_WALL_STRAFE,
+            INTAKE_1,
+            RETURN_1,
         TURN_RIGHT_90,
         DRIVE_TO_SHOOT_2,
         TURN_180_1,
@@ -54,6 +57,15 @@ public final class RedAutoPlan {
                 );
             } else {
                 switch (step) {
+
+                    case CLEAR_WALL_FORWARD:
+                        planned = translate(planned, 2.0, 0.0);
+                        break;
+
+                    case CLEAR_WALL_STRAFE:
+                        planned = translate(planned, 0.0, 2.0);
+                        break;
+
                     case INTAKE_1:
                         planned = translate(planned, 48.0, 0);
                         break;
@@ -98,8 +110,10 @@ public final class RedAutoPlan {
         return targets[step.ordinal()];
     }
 
-    public static boolean isDrive(Step step) {
-        return step == Step.INTAKE_1
+        public static boolean isDrive(Step step) {
+            return step == Step.CLEAR_WALL_FORWARD
+                    || step == Step.CLEAR_WALL_STRAFE
+                    || step == Step.INTAKE_1
                 || step == Step.RETURN_1
                 || step == Step.DRIVE_TO_SHOOT_2
                 || step == Step.BACK_HALF_TILE_1

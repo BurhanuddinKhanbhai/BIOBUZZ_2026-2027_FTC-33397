@@ -133,11 +133,15 @@ public class RedAuto extends OpMode {
                         target.getY() - follower.getPose().getY()
                 );
 
-                double tolerance = (
-                        step == RedAutoPlan.Step.INTAKE_1
+                boolean clearanceMove =
+                        step == RedAutoPlan.Step.CLEAR_WALL_FORWARD
+                                || step == RedAutoPlan.Step.CLEAR_WALL_STRAFE;
+
+                double tolerance = clearanceMove ? 0.5 :
+                        (step == RedAutoPlan.Step.INTAKE_1
                                 || step == RedAutoPlan.Step.INTAKE_2
-                                || step == RedAutoPlan.Step.RETURN_1
-                ) ? 4.0 : settings.positionTolerance;
+                                || step == RedAutoPlan.Step.RETURN_1)
+                        ? 4.0 : settings.positionTolerance;
 
                 if (distanceToTarget <= tolerance) {
                     follower.breakFollowing();
