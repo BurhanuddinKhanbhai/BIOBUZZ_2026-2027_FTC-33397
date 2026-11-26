@@ -119,7 +119,7 @@ public class Teleop extends OpMode {
         } else if (gamepad2.a) {
             // Intake at 100%, transfer at 90%
             intake.setPower(1.00);
-            transfer.setPower(0.90);
+            transfer.setPower(1.00);
 
         } else if (gamepad2.b) {
             // Intake only at 100%
@@ -128,7 +128,7 @@ public class Teleop extends OpMode {
 
         } else if (gamepad2.x) {
             // Intake at 100%, transfer at 15%
-            intake.setPower(1.00);
+            intake.setPower(0.6);
             transfer.setPower(0.15);
 
         } else {
