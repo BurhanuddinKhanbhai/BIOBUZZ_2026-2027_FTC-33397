@@ -27,10 +27,10 @@ public final class RedAutoPlan {
         // STEP                 FORWARD   LEFT    TURN°   POWER  TOLERANCE  SECONDS
 
         CLEAR_WALL_FORWARD (  4.0,   0.0,   0.0,  0.35,  0.5,  0.0),
-        SHOOT_1            (  0.0,   0.0,   0.0,  0.00,  0.0,  2.0),
+        SHOOT_1            (  0.0,   0.0,   0.0,  0.00,  0.0,  3.0),
         TURN_LEFT_90       (  0.0,   0.0, 180.0,  1.00,  5.0,  0.0),
-        CLEAR_WALL_STRAFE  (-10.0, -46.0,   0.0,  1.0,  0.5,  0.0),
-        INTAKE_1           ( 17.0,   0.0,   0.0,  0.30,  4.0,  1.0),
+        CLEAR_WALL_STRAFE  (-10.0, -46.0,   0.0,  1.0,  3.0,  0.0),
+        INTAKE_1           ( 19.0,   0.0,   0.0,  0.5,  8.0,  0.0),
 
         RETURN_1          (-15.0, 26.0,   0.0, 1.00, 4.0, 0.0),
         DRIVE_TO_SHOOT_2  (-100.0, 0.0,   0.0, 1.00, 1.0, 0.0),
