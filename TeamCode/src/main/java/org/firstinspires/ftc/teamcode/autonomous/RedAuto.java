@@ -88,12 +88,24 @@ public class RedAuto extends OpMode {
 
     @Override public void init_loop() { showTelemetry(); }
 
+
     @Override public void start() {
-        if (gamepad1.b || gamepad2.b) { stop(); requestOpModeStop(); return; }
+        if (gamepad1.b || gamepad2.b) {
+            stop();
+            requestOpModeStop();
+            return;
+        }
+
         follower.setStartingPose(plan.getStart());
+
+        // Start the shooter once and maintain its speed throughout autonomous.
+        shooter.setPollenMode();
+        shooter.setTargetVelocity(POLLEN_TICKS_PER_SECOND);
+
         running = true;
         enter(RedAutoPlan.Step.CLEAR_WALL_FORWARD, clock.getAsLong());
     }
+
 
     @Override public void loop() {
         if (running) {
@@ -179,12 +191,9 @@ public class RedAuto extends OpMode {
         if (intakeStep) intake.intake();
         else intake.stop();
         transfer.stop();
-        shooter.stop();
         feedStatus = "STOPPED";
 
         if (RedAutoPlan.isShoot(step)) {
-            shooter.setPollenMode();
-            shooter.setTargetVelocity(POLLEN_TICKS_PER_SECOND);
             feedStatus = "WAITING FOR FLYWHEEL / SERVO";
         } else if (RedAutoPlan.isDrive(step)) {
             // Avoid constructing or following a zero-length Pedro path.
@@ -223,7 +232,6 @@ public class RedAuto extends OpMode {
             if (elapsed(now, feedStarted) >= duration) {
                 intake.stop();
                 transfer.stop();
-                shooter.stop();
                 feeding = false;
                 advance(now);
             } else {
