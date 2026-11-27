@@ -40,8 +40,8 @@ public class Teleop extends OpMode {
     private static final double ADJUSTMENT_SETTLING_SECONDS = .05;
     private static final Servo.Direction ADJUSTMENT_DIRECTION = Servo.Direction.FORWARD;
     // Calibrated with servo 1 FORWARD and servo 2 REVERSE; do not invert these numbers.
-    private static final double FLOWER_RAISED_POSITION = 0.2;
-    private static final double FLOWER_LOWERED_POSITION = 0.4;
+    private static final double FLOWER_RAISED_POSITION = 0.3;
+    private static final double FLOWER_LOWERED_POSITION = 0.5;
 
     // Flywheel speed selection is independent of Shooter's ball/servo selection modes.
     private enum FlywheelSpeedMode { AUTO, MANUAL }

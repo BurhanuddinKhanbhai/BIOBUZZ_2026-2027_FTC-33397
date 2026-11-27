@@ -28,20 +28,31 @@ public class RedAuto extends OpMode {
         public double headingTolerance = Math.toRadians(5.0);
         public double stoppedSpeed = 1.0;
         public double endpointTimeoutMs = 11000.0;
-        public double intakePower = 1.0;
-        public double transferPower = 0.90;
+
+        // Speeds when collecting balls
+        public double pickupIntakePower = 0.60;
+        public double pickupTransferPower = 0.1;
+
+        // Speeds when feeding balls into the shooter
+        public double shootingIntakePower = 1.0;
+        public double shootingTransferPower = 0.90;
+
         public double flywheelTolerance = 75.0;
         public double flywheelStableSeconds = 0.25;
         public double pollenPosition = 0.10;
         public double nectarPosition = 0.00;
         public double adjustmentSettlingSeconds = 0.05;
-        public double flower1Raised = 0.2;
-        public double flower1Lowered = 0.4;
-        public double flower2Lowered = 0.4;
+        public double flower1Raised = 0.3;
+        public double flower1Lowered = 0.5;
+        public double flower2Lowered = 0.5;
         public Servo.Direction flower2Direction = Servo.Direction.REVERSE;
     }
 
-    private static final double POLLEN_TICKS_PER_SECOND = 1200.0;
+
+    private static final double SHOOT_1_SPEED = 1200.0;
+    private static final double SHOOT_2_SPEED = 1000.0;
+    private static final double SHOOT_3_SPEED = 1000.0;
+
     private final Settings settings;
     private final LongSupplier clock;
     private RedAutoPlan plan;
@@ -69,8 +80,19 @@ public class RedAuto extends OpMode {
     @Override public void init() {
         plan = new RedAutoPlan();
         driveTrain = new DriveTrain(hardwareMap);
-        intake = new Intake(hardwareMap, DcMotorSimple.Direction.REVERSE, settings.intakePower);
-        transfer = new Transfer(hardwareMap, DcMotorSimple.Direction.REVERSE, settings.transferPower);
+
+        intake = new Intake(
+                hardwareMap,
+                DcMotorSimple.Direction.REVERSE,
+                settings.pickupIntakePower
+        );
+
+        transfer = new Transfer(
+                hardwareMap,
+                DcMotorSimple.Direction.REVERSE,
+                settings.pickupTransferPower
+        );
+
         shooter = new Shooter(hardwareMap, DcMotorSimple.Direction.FORWARD, DcMotorSimple.Direction.REVERSE,
                 settings.flywheelTolerance, settings.flywheelStableSeconds,
                 Servo.Direction.FORWARD, settings.adjustmentSettlingSeconds);
@@ -100,8 +122,7 @@ public class RedAuto extends OpMode {
 
         // Start the shooter once and maintain its speed throughout autonomous.
         shooter.setPollenMode();
-        shooter.setTargetVelocity(POLLEN_TICKS_PER_SECOND);
-
+        shooter.setTargetVelocity(SHOOT_1_SPEED);
         running = true;
         enter(RedAutoPlan.Step.CLEAR_WALL_FORWARD, clock.getAsLong());
     }
@@ -125,14 +146,42 @@ public class RedAuto extends OpMode {
 
             } else if (RedAutoPlan.isDrive(step)) {
 
-                if (step == RedAutoPlan.Step.INTAKE_FLOWER) {
+                if (step == RedAutoPlan.Step.INTAKE_1) {
+
+                    if (activePath != null) {
+                        double distance = Math.hypot(
+                                target.getX() - follower.getPose().getX(),
+                                target.getY() - follower.getPose().getY()
+                        );
+
+                        if (distance <= step.getFinishTolerance()) {
+                            follower.breakFollowing();
+                            driveTrain.stop();
+                            activePath = null;
+
+                            // Start the waiting timer after reaching the intake.
+                            stepStarted = now;
+                        }
+                    }
+
+                    // Keep intaking while stationary for the configured duration.
+                    if (activePath == null &&
+                            elapsed(now, stepStarted) >= step.getDurationSeconds()) {
+                        advance(now);
+                    }
+
+                } else if (step == RedAutoPlan.Step.INTAKE_FLOWER) {
+
 
                     boolean intakeTimeComplete =
                             elapsed(now, stepStarted) >= step.getDurationSeconds();
 
+
                     if (intakeTimeComplete) {
                         intake.stop();
+                        transfer.stop();
                     }
+
 
                     if (activePath != null) {
                         double distance = Math.hypot(
@@ -186,12 +235,22 @@ public class RedAuto extends OpMode {
         feeding = false;
         status = "RUNNING";
 
+
         boolean intakeStep = step == RedAutoPlan.Step.INTAKE_1
-                || (step == RedAutoPlan.Step.INTAKE_FLOWER && !plan.isZeroDistanceDrive(step));
-        if (intakeStep) intake.intake();
-        else intake.stop();
-        transfer.stop();
+                || (step == RedAutoPlan.Step.INTAKE_FLOWER
+                && !plan.isZeroDistanceDrive(step));
+
+        if (intakeStep) {
+            // Pickup speeds
+            intake.setPower(settings.pickupIntakePower);
+            transfer.setPower(settings.pickupTransferPower);
+        } else {
+            intake.stop();
+            transfer.stop();
+        }
+
         feedStatus = "STOPPED";
+
 
         if (RedAutoPlan.isShoot(step)) {
             feedStatus = "WAITING FOR FLYWHEEL / SERVO";
@@ -240,9 +299,11 @@ public class RedAuto extends OpMode {
             }
             return;
         }
+
         if (shooter.isReadyToFeed()) {
-            intake.intake();
-            transfer.feed();
+            intake.setPower(settings.shootingIntakePower);
+            transfer.setPower(settings.shootingTransferPower);
+
             feeding = true;
             feedStarted = now;
             feedStatus = "FEEDING POLLEN";
@@ -252,15 +313,26 @@ public class RedAuto extends OpMode {
     }
 
 
+
     private void advance(long now) {
         if (step == RedAutoPlan.Step.PARK_BACKWARD) {
             stop();
             status = "COMPLETE - parked";
             requestOpModeStop();
         } else {
+
+            // Adjust flywheel velocity between shooting sequences.
+            // The flywheels remain running throughout autonomous.
+            if (step == RedAutoPlan.Step.SHOOT_1) {
+                shooter.setTargetVelocity(SHOOT_2_SPEED);
+            } else if (step == RedAutoPlan.Step.SHOOT_2) {
+                shooter.setTargetVelocity(SHOOT_3_SPEED);
+            }
+
             enter(RedAutoPlan.Step.values()[step.ordinal() + 1], now);
         }
     }
+
 
 
     @Override public void stop() {
