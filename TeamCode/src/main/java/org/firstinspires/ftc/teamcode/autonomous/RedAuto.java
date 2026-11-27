@@ -50,8 +50,8 @@ public class RedAuto extends OpMode {
 
 
     private static final double SHOOT_1_SPEED = 1200.0;
-    private static final double SHOOT_2_SPEED = 1000.0;
-    private static final double SHOOT_3_SPEED = 1000.0;
+    private static final double SHOOT_2_SPEED = 1100.0;
+    private static final double SHOOT_3_SPEED = 1100.0;
 
     private final Settings settings;
     private final LongSupplier clock;
