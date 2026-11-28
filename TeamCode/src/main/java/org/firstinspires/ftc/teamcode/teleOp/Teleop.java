@@ -157,9 +157,7 @@ public class Teleop extends OpMode {
 
         telemetry.addData(
                 "Vision flywheel target",
-                flywheelSpeedMode == FlywheelSpeedMode.AUTO
-                        ? flywheelTargetVelocity
-                        : "MANUAL MODE"
+                "NOT STARTED"
         );
 
         telemetry.update();
