@@ -21,6 +21,9 @@ import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 @TeleOp(name = "BIOBUZZ TeleOp", group = "Competition")
 public class Teleop extends OpMode {
     // Competition drive scales.
+
+    private static final double POLLEN_FIXED_SPEED_TPS = 1100.0;
+    private static final double NECTAR_FIXED_SPEED_TPS = 1300.0;
     private static final double NORMAL_SPEED_SCALE = 1.0;
     private static final double PRECISION_SPEED_SCALE = 0.6;
     // Per-axis threshold in [0.0, 1.0); inputs outside it retain their original magnitude.
@@ -44,7 +47,7 @@ public class Teleop extends OpMode {
     private static final long MAX_VISION_AGE_MS = 200;
 
     // Enable only after physical verification of direction, alignment, selection and controller.
-    private static final boolean AUTO_AIM_ENABLED = true;
+    private static final boolean AUTO_AIM_ENABLED = false;
     private static final double AIM_KP = 0.020;
     private static final double AIM_MAX_TURN = 1.0;
     private static final double AIM_TOLERANCE_DEG = 1.5;
@@ -235,14 +238,14 @@ public class Teleop extends OpMode {
             // B: INTAKE ONLY
             // No shooter readiness requirement.
             intake.setPower(1.00);
-            transfer.setPower(.30);
+            transfer.setPower(.40 );
 
         } else if (gamepad2.x) {
 
             // X: SLOW INTAKE / ANTI-JAM
             // Both motors run regardless of shooter readiness.
-            intake.setPower(0.60);
-            transfer.setPower(0.1);
+            intake.setPower(0.70);
+            transfer.setPower(0.15);
 
         } else {
 
@@ -580,15 +583,39 @@ public class Teleop extends OpMode {
     }
 
 
+
     private double getDistanceBasedFlywheelSpeed() {
-        // No valid Limelight distance: stop AUTO flywheels.
-        if (!Double.isFinite(visionDistanceInches)) {
-            autoSpeedStatus = "NO DISTANCE";
-            lastAutoVisionSpeed = Double.NaN;
-            return 0.0;
+
+        // Use the compression ramp's last commanded position.
+        // No Limelight distance is required.
+        double rampPosition = shooter.getAdjustmentTargetPosition();
+
+        if (Double.isFinite(rampPosition)
+                && Math.abs(rampPosition - NECTAR_ADJUSTMENT_POSITION) < 0.0001) {
+
+            autoSpeedStatus = "NECTAR - 1300 TPS";
+            lastAutoVisionSpeed = NECTAR_FIXED_SPEED_TPS;
+            return NECTAR_FIXED_SPEED_TPS;
         }
 
-        // Outside the calibrated range, use 1100 TPS.
+        if (Double.isFinite(rampPosition)
+                && Math.abs(rampPosition - POLLEN_ADJUSTMENT_POSITION) < 0.0001) {
+
+            autoSpeedStatus = "POLLEN - 1100 TPS";
+            lastAutoVisionSpeed = POLLEN_FIXED_SPEED_TPS;
+            return POLLEN_FIXED_SPEED_TPS;
+        }
+
+        // No known compression position: keep flywheels spinning.
+        // Shooter readiness still prevents A-button feeding
+        // without a valid ball selection.
+        autoSpeedStatus = "NO RAMP SELECTION - 1100 TPS";
+        lastAutoVisionSpeed = POLLEN_FIXED_SPEED_TPS;
+        return POLLEN_FIXED_SPEED_TPS;
+    }
+
+
+    // Outside the calibrated range, use 1100 TPS.
         if (visionDistanceInches < NEAR_DISTANCE_IN
                 || visionDistanceInches > FAR_DISTANCE_IN) {
             autoSpeedStatus = "OUT OF RANGE - 1100 TPS";
