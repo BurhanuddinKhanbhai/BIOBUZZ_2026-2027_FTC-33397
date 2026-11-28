@@ -444,6 +444,10 @@ public class Teleop extends OpMode {
 
     private void addVisionTelemetry() {
         telemetry.addData("Limelight / pipeline", "%s / %d", limelight.getStatus(), limelight.getPipelineIndex());
+        telemetry.addData("AprilTag ID",
+                limelight.getSelectedTagId() == -1
+                        ? "NONE"
+                        : limelight.getSelectedTagId());
         telemetry.addData("Vision tx / ty (degrees)", "%.2f / %.2f", visionTx, visionTy);
         telemetry.addData("Vision age (ms)", limelight.getResultAgeMillis());
         telemetry.addData("Vision distance (inches)", Double.isFinite(visionDistanceInches)

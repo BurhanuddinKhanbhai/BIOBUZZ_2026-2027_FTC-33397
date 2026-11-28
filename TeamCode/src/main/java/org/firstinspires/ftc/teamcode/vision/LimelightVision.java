@@ -3,6 +3,7 @@ package org.firstinspires.ftc.teamcode.vision;
 import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.hardware.limelightvision.LLResultTypes;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -21,6 +22,12 @@ public class LimelightVision {
     private double targetTy = Double.NaN;
     private double targetTa = Double.NaN;
     private int resultPipelineIndex = -1;
+
+    private int selectedTagId = -1;
+
+    public int getSelectedTagId() {
+        return hasTarget() ? selectedTagId : -1;
+    }
 
     private double frameTimestamp = Double.NaN;
     private long frameFirstSeenNanos;
@@ -229,32 +236,74 @@ public class LimelightVision {
      * can substitute zero or coerce nonnumeric fields. Parse once per SDK result object,
      * including invalid results. Timestamp-based frozen-frame tracking remains separate.
      */
+
     private void validateMeasurements(LLResult latest) {
         if (latest == validatedResult) {
             return;
         }
+
         validatedResult = latest;
-        targetTx = targetTy = targetTa = Double.NaN;
+        targetTx = Double.NaN;
+        targetTy = Double.NaN;
+        targetTa = Double.NaN;
         resultPipelineIndex = -1;
+        selectedTagId = -1;
+
         try {
             JSONObject json = new JSONObject(latest.toString());
-            double tx = getFiniteNumber(json, "tx");
-            double ty = getFiniteNumber(json, "ty");
-            double ta = getFiniteNumber(json, "ta");
             double pipeline = getFiniteNumber(json, "pID");
-            // Require actual pipeline metadata; optInt's default zero is not evidence of pipeline 0.
-            if (!isFinite(pipeline) || pipeline < 0.0 || pipeline > Integer.MAX_VALUE
+
+            if (!isFinite(pipeline)
+                    || pipeline < 0
+                    || pipeline > Integer.MAX_VALUE
                     || pipeline != Math.rint(pipeline)) {
                 return;
             }
+
             resultPipelineIndex = (int) pipeline;
-            targetTx = tx;
-            targetTy = ty;
-            targetTa = ta;
+
+            if (latest.getFiducialResults() == null) {
+                return;
+            }
+
+            double closestOffset = Double.POSITIVE_INFINITY;
+
+            for (LLResultTypes.FiducialResult tag
+                    : latest.getFiducialResults()) {
+
+                int id = tag.getFiducialId();
+
+                // Accept scoring AprilTags from either alliance.
+                if (id < 30 || id > 45) {
+                    continue;
+                }
+
+                double tx = tag.getTargetXDegrees();
+                double ty = tag.getTargetYDegrees();
+                double ta = tag.getTargetArea();
+
+                if (!isFinite(tx) || !isFinite(ty)
+                        || !isFinite(ta)
+                        || ta < 0 || ta > 100) {
+                    continue;
+                }
+
+                // Pick the visible tag nearest the crosshair.
+                if (Math.abs(tx) < closestOffset) {
+                    closestOffset = Math.abs(tx);
+
+                    selectedTagId = id;
+                    targetTx = tx;
+                    targetTy = ty;
+                    targetTa = ta;
+                }
+            }
+
         } catch (JSONException e) {
-            // Leave the cached measurements invalid; do not retry parsing this same result.
+            // Keep measurements invalid if metadata cannot be parsed.
         }
     }
+
 
     private static double getFiniteNumber(JSONObject json, String key) {
         Object value = json.opt(key);
