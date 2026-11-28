@@ -400,7 +400,7 @@ public class Teleop extends OpMode {
         return shootingCoordinator.getDetectedBallType();
     }
 
-    /** Updates rising edges and commands velocity; returns the mode target before the ON/OFF gate. */
+    /** Updates rising edge s and commands velocity; returns the mode target before the ON/OFF gate. */
     private double updateFlywheels() {
         boolean y = gamepad2.y;
         boolean speedModeButton = gamepad2.left_bumper;
