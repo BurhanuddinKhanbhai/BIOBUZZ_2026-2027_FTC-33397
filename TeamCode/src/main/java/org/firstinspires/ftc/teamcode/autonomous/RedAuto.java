@@ -35,21 +35,21 @@ public class RedAuto extends OpMode {
 
         // Speeds when feeding balls into the shooter
         public double shootingIntakePower = 1.0;
-        public double shootingTransferPower = 0.90;
+        public double shootingTransferPower = 0.75;
 
         public double flywheelTolerance = 75.0;
         public double flywheelStableSeconds = 0.25;
-        public double pollenPosition = 0.10;
+        public double pollenPosition = 0.09;
         public double nectarPosition = 0.00;
         public double adjustmentSettlingSeconds = 0.05;
-        public double flower1Raised = 0.3;
-        public double flower1Lowered = 0.5;
-        public double flower2Lowered = 0.5;
+        public double flower1Raised = 0.0;
+        public double flower1Lowered = 0.3;
+        public double flower2Lowered = 0.3;
         public Servo.Direction flower2Direction = Servo.Direction.REVERSE;
     }
 
 
-    private static final double SHOOT_1_SPEED = 1200.0;
+    private static final double SHOOT_1_SPEED = 1150.0;
     private static final double SHOOT_2_SPEED = 1100.0;
     private static final double SHOOT_3_SPEED = 1100.0;
 
@@ -170,37 +170,7 @@ public class RedAuto extends OpMode {
                         advance(now);
                     }
 
-                } else if (step == RedAutoPlan.Step.INTAKE_FLOWER) {
-
-
-                    boolean intakeTimeComplete =
-                            elapsed(now, stepStarted) >= step.getDurationSeconds();
-
-
-                    if (intakeTimeComplete) {
-                        intake.stop();
-                        transfer.stop();
-                    }
-
-
-                    if (activePath != null) {
-                        double distance = Math.hypot(
-                                target.getX() - follower.getPose().getX(),
-                                target.getY() - follower.getPose().getY()
-                        );
-
-                        if (distance <= step.getFinishTolerance()) {
-                            follower.breakFollowing();
-                            driveTrain.stop();
-                            activePath = null;
-                        }
-                    }
-
-                    if (activePath == null && intakeTimeComplete) {
-                        advance(now);
-                    }
-
-                } else if (activePath == null) {
+                }else if (activePath == null) {
 
                     advance(now);
 
@@ -237,8 +207,8 @@ public class RedAuto extends OpMode {
 
 
         boolean intakeStep = step == RedAutoPlan.Step.INTAKE_1
-                || (step == RedAutoPlan.Step.INTAKE_FLOWER
-                && !plan.isZeroDistanceDrive(step));
+
+                && !plan.isZeroDistanceDrive(step);
 
         if (intakeStep) {
             // Pickup speeds
@@ -279,9 +249,6 @@ public class RedAuto extends OpMode {
                     ? positiveAngle(target.getHeading() - follower.getPose().getHeading())
                     : -positiveAngle(follower.getPose().getHeading() - target.getHeading());
             follower.turn(rotation);
-        } else if (step == RedAutoPlan.Step.FLOWER_DOWN) {
-            flower.lower();
-            flower2.setPosition(settings.flower2Lowered);
         }
     }
 

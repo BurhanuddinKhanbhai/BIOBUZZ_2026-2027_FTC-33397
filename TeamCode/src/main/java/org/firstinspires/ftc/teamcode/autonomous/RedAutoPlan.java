@@ -30,20 +30,12 @@ public final class RedAutoPlan {
         SHOOT_1            (  0.0,   0.0,   0.0,  0.00,  0.0,  3.0),
         TURN_LEFT_90       (  0.0,   0.0, 180.0,  1.00,  5.0,  0.0),
         CLEAR_WALL_STRAFE  (-5.0, -46.0,   0.0,  1.0,  3.0,  0.0),
-        INTAKE_1           ( 14.0,   0.0,   0.0,  0.75,  8.0,  2.0),
+        INTAKE_1           ( 13.0,   0.0,   0.0,  0.75,  8.0,  2.0),
 
         RETURN_1          (-15.0, 26.0,   0.0, 1.00, 4.0, 0.0),
         DRIVE_TO_SHOOT_2  (-100.0, 0.0,   0.0, 1.00, 1.0, 0.0),
-        TURN_RIGHT_70_1   (  0.0,  0.0,  40.0, 1.00, 5.0, 0.0),
+        TURN_RIGHT_70_1   (  0.0,  0.0,  30.0, 1.00, 5.0, 0.0),
         SHOOT_2           (  0.0,  0.0,   0.0, 0.00, 0.0, 4.0),
-
-        FLOWER_DOWN        (  0.0, 0.0,    0.0, 0.00, 0.0, 1.0),
-
-        TURN_TO_ZERO       (0.0, 0.0, 130.0, 1.00, 5.0, 0.0),
-        INTAKE_FLOWER      (  5.0, -6.0,    0.0, 0.75, 0.5, 3.0),
-        RETURN_FROM_FLOWER ( -5.0, 0.0,    0.0, 0.75, 0.5, 0.0),
-        TURN_RIGHT_150_2   (  0.0, 0.0, -150.0, 1.00, 5.0, 0.0),
-        SHOOT_3            (  0.0, 0.0,    0.0, 0.00, 0.0, 4.0),
         PARK_BACKWARD      (5.0, -10.0,    0.0, 1.00, 1.0, 0.0);
 
         private final double forwardInches;
@@ -105,8 +97,6 @@ public final class RedAutoPlan {
                 || step == Step.INTAKE_1
                 || step == Step.RETURN_1
                 || step == Step.DRIVE_TO_SHOOT_2
-                || step == Step.INTAKE_FLOWER
-                || step == Step.RETURN_FROM_FLOWER
                 || step == Step.PARK_BACKWARD;
     }
 
@@ -114,15 +104,13 @@ public final class RedAutoPlan {
 
     public static boolean isTurn(Step step) {
         return step == Step.TURN_LEFT_90
-                || step == Step.TURN_RIGHT_70_1
-                || step == Step.TURN_TO_ZERO
-                || step == Step.TURN_RIGHT_150_2;
+                || step == Step.TURN_RIGHT_70_1;
     }
 
 
 
     public static boolean isShoot(Step step) {
-        return step == Step.SHOOT_1 || step == Step.SHOOT_2 || step == Step.SHOOT_3;
+        return step == Step.SHOOT_1 || step == Step.SHOOT_2;
     }
 
     public static double turnRadians(Step step) {

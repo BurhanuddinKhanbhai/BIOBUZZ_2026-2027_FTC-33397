@@ -40,17 +40,30 @@ public class ShootingCoordinator {
      * preserves manual overrides. Readiness uses Shooter's existing checks; vision is
      * informational and never changes velocity or gates readiness. No waits or delays.
      */
+
     public void update() {
+        updateSelection();
+        updateReadiness();
+    }
+
+    public void updateSelection() {
         readyToFeed = false;
+
         if (colorSensor != null) {
             colorSensor.update();
         }
+
         shooter.update(getDetectedBallType());
+
         if (vision != null) {
             vision.update();
         }
+    }
+
+    public void updateReadiness() {
         readyToFeed = shooter.isReadyToFeed();
     }
+
 
     /**
      * Software readiness from the latest completed update(), initially false.

@@ -44,9 +44,9 @@ public class Teleop extends OpMode {
     private static final long MAX_VISION_AGE_MS = 200;
 
     // Enable only after physical verification of direction, alignment, selection and controller.
-    private static final boolean AUTO_AIM_ENABLED = false;
+    private static final boolean AUTO_AIM_ENABLED = true;
     private static final double AIM_KP = 0.020;
-    private static final double AIM_MAX_TURN = 0.35;
+    private static final double AIM_MAX_TURN = 1.0;
     private static final double AIM_TOLERANCE_DEG = 1.5;
     private static final double AIM_TX_SETPOINT_DEG = 0.0;
 
@@ -60,21 +60,28 @@ public class Teleop extends OpMode {
     // ========== SHOOTING SPEED CALIBRATION ==========
 // Enter two measured shooting distances and
 // their successful flywheel speeds (ticks/second).
-    private static final double NEAR_DISTANCE_IN = Double.NaN;
-    private static final double FAR_DISTANCE_IN = Double.NaN;
 
-    private static final double NEAR_SPEED_TPS = Double.NaN;
-    private static final double FAR_SPEED_TPS = Double.NaN;
+    private static final double NEAR_DISTANCE_IN = 65;
+    private static final double FAR_DISTANCE_IN = 83;
+
+    private static final double POLLEN_NEAR_SPEED_TPS = 1100;
+    private static final double POLLEN_FAR_SPEED_TPS = 1050;
+
+    private static final double NECTAR_NEAR_SPEED_TPS = 1400;
+    private static final double NECTAR_FAR_SPEED_TPS = 1350;
+
+    private static final double OUT_OF_RANGE_SPEED_TPS = 1100;
+
 
 
     // Current calibrated shooter adjustment presets.
-    private static final double POLLEN_ADJUSTMENT_POSITION = 0.1;
+    private static final double POLLEN_ADJUSTMENT_POSITION = 0.09;
     private static final double NECTAR_ADJUSTMENT_POSITION = 0.0;
-    private static final double ADJUSTMENT_SETTLING_SECONDS = .05;
+    private static final double ADJUSTMENT_SETTLING_SECONDS = .04;
     private static final Servo.Direction ADJUSTMENT_DIRECTION = Servo.Direction.FORWARD;
     // Calibrated with servo 1 FORWARD and servo 2 REVERSE; do not invert these numbers.
-    private static final double FLOWER_RAISED_POSITION = 0.3;
-    private static final double FLOWER_LOWERED_POSITION = 0.5;
+    private static final double FLOWER_RAISED_POSITION = 0.0;
+    private static final double FLOWER_LOWERED_POSITION = 0.3;
 
     // Flywheel speed selection is independent of Shooter's ball/servo selection modes.
     private enum FlywheelSpeedMode { AUTO, MANUAL }
@@ -128,7 +135,7 @@ public class Teleop extends OpMode {
 
         flywheelSpeedMode = FlywheelSpeedMode.AUTO;
         flywheelsEnabled = false;
-        manualTargetVelocity = 0.0;
+        manualTargetVelocity = 1100.0;
         previousY = previousSpeedModeButton = previousDpadUp = previousDpadDown = false;
         telemetry.addData("Status", "Drivetrain, intake, transfer, and flywheels initialized");
         telemetry.addData("Speed scale", driveTrain.getSpeedScale());
@@ -179,39 +186,87 @@ public class Teleop extends OpMode {
         driveTrain.drive(forward, strafe, turn);
 
 
-        // Current competition controls: RT overrides A, B and X.
-        if (gamepad2.right_trigger > TRIGGER_THRESHOLD) {
-            // Outtake: both motors reverse at 50%
+
+        // ========== SHOOTER AND BALL SELECTION ==========
+
+        // Update ball classification and compression servo first.
+        updateBallSelectionMode();
+        shootingCoordinator.update();
+
+        // Calculate flywheel speed using the selected ball type
+        // and the latest Limelight distance.
+        double flywheelTargetVelocity = updateFlywheels();
+
+        // Check readiness AFTER setting the current flywheel target.
+        // Requires both motors at speed, correct ball selection,
+        // and compression servo settling.
+        boolean readyToFeed = shooter.isReadyToFeed();
+
+        boolean flywheelsAtSpeed =
+                readyToFeed || shooter.isAtSpeed();
+
+        // ========== GAMEPAD 2 MOTOR CONTROLS ==========
+
+        boolean reversing =
+                gamepad2.right_trigger > TRIGGER_THRESHOLD;
+
+        if (reversing) {
+
+            // RIGHT TRIGGER: Reverse both motors to clear jams.
+            // This overrides A, B, and X.
             intake.setPower(-0.50);
             transfer.setPower(-0.50);
 
         } else if (gamepad2.a) {
-            // Intake and transfer at 100%
+
+            // A: SHOOT
+            // Intake runs at full power.
+            // Transfer only runs when the shooter is ready.
             intake.setPower(1.00);
-            transfer.setPower(1.00);
+
+            if (readyToFeed) {
+                transfer.setPower(0.55);
+            } else {
+                transfer.stop();
+            }
 
         } else if (gamepad2.b) {
-            // Intake only at 100%
+
+            // B: INTAKE ONLY
+            // No shooter readiness requirement.
             intake.setPower(1.00);
-            transfer.stop();
+            transfer.setPower(.30);
 
         } else if (gamepad2.x) {
-            // Intake at 60%, transfer at 15%
-            intake.setPower(0.6);
-            transfer.setPower(0.15);
+
+            // X: SLOW INTAKE / ANTI-JAM
+            // Both motors run regardless of shooter readiness.
+            intake.setPower(0.60);
+            transfer.setPower(0.1);
 
         } else {
+
+            // No buttons held: stop both motors.
             intake.stop();
             transfer.stop();
         }
 
-        double flywheelTargetVelocity = updateFlywheels();
-        updateBallSelectionMode();
-        // Coordinator alone updates color, then shooter selection, then software feed readiness.
-        shootingCoordinator.update();
-        // Feed-ready already proves at-speed; keep that snapshot instead of polling it again.
-        boolean flywheelsAtSpeed = shootingCoordinator.isReadyToFeed() || shooter.isAtSpeed();
+        // ========== SHOOTING SAFETY TELEMETRY ==========
+
+        telemetry.addData("Shoot button held", gamepad2.a);
+        telemetry.addData("Shooter ready", readyToFeed);
+        telemetry.addData("Compression settled",
+                shooter.isAdjustmentSettled());
+
+        telemetry.addData("Shoot status",
+                reversing ? "REVERSE OVERRIDE"
+                        : !gamepad2.a ? "NOT REQUESTED"
+                          : readyToFeed ? "SHOOTING"
+                            : "WAITING FOR SHOOTER");
+
+        // Keep flower controls unchanged.
         updateFlowerMechanism();
+
 
         telemetry.addData("Drive command", "Forward %.2f | Strafe %.2f | Turn %.2f",
                 forward, strafe, turn);
@@ -388,7 +443,8 @@ public class Teleop extends OpMode {
         telemetry.addData("Shooter servo command", Double.isNaN(position) ? "UNCOMMANDED" : position);
         telemetry.addData("Shooter servo settled", shooter.isAdjustmentSettled());
         // Software readiness only; does not confirm safe staging or operate the manual transfer.
-        telemetry.addData("Shooter ready to feed", shootingCoordinator.isReadyToFeed());
+        telemetry.addData("Shooter ready to feed",
+                shooter.isReadyToFeed());
     }
 
     /** Driver intent for telemetry, not confirmation that a servo command could be applied. */
@@ -403,45 +459,57 @@ public class Teleop extends OpMode {
     }
 
     /** Updates rising edge s and commands velocity; returns the mode target before the ON/OFF gate. */
+
     private double updateFlywheels() {
-        boolean y = gamepad2.y;
         boolean speedModeButton = gamepad2.left_bumper;
         boolean up = gamepad2.dpad_up;
         boolean down = gamepad2.dpad_down;
-        if (y && !previousY) {
-            flywheelsEnabled = !flywheelsEnabled;
-        }
+
+        // Toggle AUTO / MANUAL speed modes.
         if (speedModeButton && !previousSpeedModeButton) {
-            flywheelSpeedMode = flywheelSpeedMode == FlywheelSpeedMode.AUTO
-                    ? FlywheelSpeedMode.MANUAL : FlywheelSpeedMode.AUTO;
+            flywheelSpeedMode =
+                    flywheelSpeedMode == FlywheelSpeedMode.AUTO
+                            ? FlywheelSpeedMode.MANUAL
+                            : FlywheelSpeedMode.AUTO;
         }
 
         if (flywheelSpeedMode == FlywheelSpeedMode.MANUAL) {
-            // Ignore conflicting D-pad directions; adjustments are allowed while OFF.
             if (up && !previousDpadUp && !down) {
-                manualTargetVelocity = Math.min(MANUAL_FLYWHEEL_MAX_VELOCITY,
-                        manualTargetVelocity + MANUAL_FLYWHEEL_INCREMENT);
+                manualTargetVelocity += MANUAL_FLYWHEEL_INCREMENT;
             } else if (down && !previousDpadDown && !up) {
-                manualTargetVelocity = Math.max(0.0,
-                        manualTargetVelocity - MANUAL_FLYWHEEL_INCREMENT);
+                manualTargetVelocity = Math.max(
+                        0.0,
+                        manualTargetVelocity - MANUAL_FLYWHEEL_INCREMENT
+                );
             }
         }
-        // Track edges even in AUTO; a held button is not a new press.
-        previousY = y;
+
         previousSpeedModeButton = speedModeButton;
         previousDpadUp = up;
         previousDpadDown = down;
 
-        // Drop AUTO history in MANUAL; returning to AUTO uses the current observation.
-        if (flywheelSpeedMode == FlywheelSpeedMode.MANUAL) lastAutoVisionSpeed = Double.NaN;
+        if (flywheelSpeedMode == FlywheelSpeedMode.MANUAL) {
+            lastAutoVisionSpeed = Double.NaN;
+        }
 
-        double targetVelocity = flywheelSpeedMode == FlywheelSpeedMode.MANUAL
-                ? manualTargetVelocity
-                : getDistanceBasedFlywheelSpeed();
+        double targetVelocity =
+                flywheelSpeedMode == FlywheelSpeedMode.MANUAL
+                        ? manualTargetVelocity
+                        : getDistanceBasedFlywheelSpeed();
 
-        shooter.setTargetVelocity(flywheelsEnabled ? targetVelocity : 0.0);
+        // Never command zero during an active match.
+        // Missing target, unknown ball, or invalid speed
+        // uses the 1100 TPS fallback.
+        if (!Double.isFinite(targetVelocity)
+                || targetVelocity <= 0.0) {
+            targetVelocity = OUT_OF_RANGE_SPEED_TPS;
+        }
+
+        shooter.setTargetVelocity(targetVelocity);
+
         return targetVelocity;
     }
+
 
 
     private void addVisionTelemetry() {
@@ -511,26 +579,65 @@ public class Teleop extends OpMode {
         return !Double.isFinite(previous) || Math.abs(quantized - previous) >= 75.0 ? quantized : previous;
     }
 
+
     private double getDistanceBasedFlywheelSpeed() {
-        if (!Double.isFinite(CAMERA_HEIGHT_IN) || !Double.isFinite(TARGET_HEIGHT_IN)
-                || !Double.isFinite(CAMERA_PITCH_DEG)
-                || !speedCalibrationValid(NEAR_DISTANCE_IN, FAR_DISTANCE_IN, NEAR_SPEED_TPS, FAR_SPEED_TPS)) {
-            autoSpeedStatus = "UNCALIBRATED";
-        } else if (!Double.isFinite(visionTx) || !Double.isFinite(visionTy)) {
-            autoSpeedStatus = "NO TARGET";
-        } else if (!Double.isFinite(visionDistanceInches)) {
-            autoSpeedStatus = "INVALID GEOMETRY";
-        } else {
-            double calculated = interpolatedSpeed(visionDistanceInches, NEAR_DISTANCE_IN, FAR_DISTANCE_IN,
-                    NEAR_SPEED_TPS, FAR_SPEED_TPS);
-            lastAutoVisionSpeed = stabilizedSpeed(calculated, lastAutoVisionSpeed, NEAR_SPEED_TPS, FAR_SPEED_TPS);
-            autoSpeedStatus = visionDistanceInches < NEAR_DISTANCE_IN || visionDistanceInches > FAR_DISTANCE_IN
-                    ? "ENDPOINT CLAMP" : "TRACKING";
-            return lastAutoVisionSpeed;
+        // No valid Limelight distance: stop AUTO flywheels.
+        if (!Double.isFinite(visionDistanceInches)) {
+            autoSpeedStatus = "NO DISTANCE";
+            lastAutoVisionSpeed = Double.NaN;
+            return 0.0;
         }
-        lastAutoVisionSpeed = Double.NaN;
-        return 0.0;
+
+        // Outside the calibrated range, use 1100 TPS.
+        if (visionDistanceInches < NEAR_DISTANCE_IN
+                || visionDistanceInches > FAR_DISTANCE_IN) {
+            autoSpeedStatus = "OUT OF RANGE - 1100 TPS";
+            lastAutoVisionSpeed = OUT_OF_RANGE_SPEED_TPS;
+            return OUT_OF_RANGE_SPEED_TPS;
+        }
+
+        // Select the speed curve for the current ball.
+        Shooter.BallType ballType = shooter.getSelectedBallType();
+
+        double nearSpeed;
+        double farSpeed;
+
+        if (ballType == Shooter.BallType.POLLEN) {
+            nearSpeed = POLLEN_NEAR_SPEED_TPS;
+            farSpeed = POLLEN_FAR_SPEED_TPS;
+        } else if (ballType == Shooter.BallType.NECTAR) {
+            nearSpeed = NECTAR_NEAR_SPEED_TPS;
+            farSpeed = NECTAR_FAR_SPEED_TPS;
+        } else {
+            autoSpeedStatus = "UNKNOWN BALL";
+            lastAutoVisionSpeed = Double.NaN;
+            return 0.0;
+        }
+
+        // Interpolate between 65 and 83 inches.
+        double calculated = interpolatedSpeed(
+                visionDistanceInches,
+                NEAR_DISTANCE_IN,
+                FAR_DISTANCE_IN,
+                nearSpeed,
+                farSpeed
+        );
+
+        if (!Double.isFinite(calculated)) {
+            autoSpeedStatus = "INVALID CALIBRATION";
+            lastAutoVisionSpeed = Double.NaN;
+            return 0.0;
+        }
+
+        // Round to the nearest 10 TPS.
+        double targetSpeed = Math.rint(calculated / 10.0) * 10.0;
+
+        lastAutoVisionSpeed = targetSpeed;
+        autoSpeedStatus = ballType + " TRACKING";
+
+        return targetSpeed;
     }
+
 
     private static double applyDeadzone(double value) {
         return Math.abs(value) <= JOYSTICK_DEADZONE ? 0.0 : value;
