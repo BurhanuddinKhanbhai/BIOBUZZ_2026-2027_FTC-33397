@@ -615,56 +615,11 @@ public class Teleop extends OpMode {
     }
 
 
-    // Outside the calibrated range, use 1100 TPS.
-        if (visionDistanceInches < NEAR_DISTANCE_IN
-                || visionDistanceInches > FAR_DISTANCE_IN) {
-            autoSpeedStatus = "OUT OF RANGE - 1100 TPS";
-            lastAutoVisionSpeed = OUT_OF_RANGE_SPEED_TPS;
-            return OUT_OF_RANGE_SPEED_TPS;
-        }
 
-        // Select the speed curve for the current ball.
-        Shooter.BallType ballType = shooter.getSelectedBallType();
 
-        double nearSpeed;
-        double farSpeed;
 
-        if (ballType == Shooter.BallType.POLLEN) {
-            nearSpeed = POLLEN_NEAR_SPEED_TPS;
-            farSpeed = POLLEN_FAR_SPEED_TPS;
-        } else if (ballType == Shooter.BallType.NECTAR) {
-            nearSpeed = NECTAR_NEAR_SPEED_TPS;
-            farSpeed = NECTAR_FAR_SPEED_TPS;
-        } else {
-            autoSpeedStatus = "UNKNOWN BALL";
-            lastAutoVisionSpeed = Double.NaN;
-            return 0.0;
-        }
 
-        // Interpolate between 65 and 83 inches.
-        double calculated = interpolatedSpeed(
-                visionDistanceInches,
-                NEAR_DISTANCE_IN,
-                FAR_DISTANCE_IN,
-                nearSpeed,
-                farSpeed
-        );
-
-        if (!Double.isFinite(calculated)) {
-            autoSpeedStatus = "INVALID CALIBRATION";
-            lastAutoVisionSpeed = Double.NaN;
-            return 0.0;
-        }
-
-        // Round to the nearest 10 TPS.
-        double targetSpeed = Math.rint(calculated / 10.0) * 10.0;
-
-        lastAutoVisionSpeed = targetSpeed;
-        autoSpeedStatus = ballType + " TRACKING";
-
-        return targetSpeed;
-    }
-
+        // Select the speed curve for the current ba
 
     private static double applyDeadzone(double value) {
         return Math.abs(value) <= JOYSTICK_DEADZONE ? 0.0 : value;
