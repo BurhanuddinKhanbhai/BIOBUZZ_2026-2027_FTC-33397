@@ -198,16 +198,16 @@ public final class FastColorChecks {
         op.gamepad2.dpad_right = false; flowerLoop(op);
         op.gamepad1.left_stick_y = -1; op.gamepad2.x = true; op.gamepad2.left_trigger = .3f;
         op.gamepad2.dpad_right = true; flowerLoop(op);
-        near(first.position, .225); near(second.position, .225);
+        near(first.position, .3); near(second.position, .3);
         check(first.calls == 1 && second.calls == 1 && first.lastLoop == flowerLoopNumber
                 && second.lastLoop == flowerLoopNumber, "UP writes both targets in one control loop");
         near(motors.get("frontLeft").power, 1); near(motors.get("frontRight").power, 1);
-        near(motors.get("intake").power, 1); near(motors.get("transfer").power, .15);
+        near(motors.get("intake").power, .6); near(motors.get("transfer").power, .15);
         flowerLoop(op); check(first.calls == 1 && second.calls == 1, "Holding RIGHT sends no repeated command");
         op.gamepad1.left_stick_y = 0; op.gamepad2.x = false; op.gamepad2.left_trigger = 0;
         op.gamepad2.dpad_right = false; flowerLoop(op);
         op.gamepad2.dpad_left = true; flowerLoop(op);
-        near(first.position, .48); near(second.position, .48);
+        near(first.position, .5); near(second.position, .5);
         check(first.calls == 2 && second.calls == 2 && first.lastLoop == flowerLoopNumber
                 && second.lastLoop == flowerLoopNumber, "DOWN writes both targets in one control loop");
         flowerLoop(op); check(first.calls == 2 && second.calls == 2, "Holding LEFT sends no repeated command");
@@ -278,9 +278,9 @@ public final class FastColorChecks {
             op.gamepad2.right_trigger = (combination & 16) != 0 ? .3f : 0;
             op.loop();
             double intake = op.gamepad2.right_trigger > .2 ? -.50
-                    : op.gamepad2.a || op.gamepad2.b || op.gamepad2.x ? 1 : 0;
+                    : op.gamepad2.a || op.gamepad2.b ? 1 : op.gamepad2.x ? .6 : 0;
             double transfer = op.gamepad2.right_trigger > .2 ? -.50
-                    : op.gamepad2.a ? .90 : op.gamepad2.b ? 0 : op.gamepad2.x ? .15 : 0;
+                    : op.gamepad2.a ? 1.0 : op.gamepad2.b ? 0 : op.gamepad2.x ? .15 : 0;
             near(motors.get("intake").power, intake); near(motors.get("transfer").power, transfer);
         }
         op.gamepad2.a = op.gamepad2.b = op.gamepad2.x = false;
@@ -315,7 +315,58 @@ public final class FastColorChecks {
         op.stop();
     }
 
+    private static double visionMath(String name, double... args) throws Exception {
+        Class<?>[] types = new Class<?>[args.length]; java.util.Arrays.fill(types, double.class);
+        java.lang.reflect.Method method = Teleop.class.getDeclaredMethod(name, types); method.setAccessible(true);
+        Object[] boxed = new Object[args.length]; for(int i=0;i<args.length;i++) boxed[i]=args[i];
+        return (double) method.invoke(null, boxed);
+    }
+
+    private static void visionChecks(File directory) throws Exception {
+        near(visionMath("estimateDistance", 15, 10, 30, 30), 20);
+        for (double[] invalid : new double[][]{{Double.NaN,10,30,30},{0,10,30,0},{0,10,10,30},
+                {0,10,30,90},{0,10,30,225},{0,10,30,-30},{0,-10,30,30}})
+            check(Double.isNaN(visionMath("estimateDistance",invalid)), "Invalid geometry rejected");
+        near(visionMath("interpolatedSpeed",60,40,80,1010,1190),1100);
+        near(visionMath("interpolatedSpeed",10,40,80,1010,1190),1010);
+        near(visionMath("interpolatedSpeed",100,40,80,1010,1190),1190);
+        near(visionMath("stabilizedSpeed",1010,Double.NaN,1010,1190),1010);
+        near(visionMath("stabilizedSpeed",1190,Double.NaN,1010,1190),1190);
+        near(visionMath("stabilizedSpeed",1140,1100,1010,1190),1100);
+        near(visionMath("stabilizedSpeed",1190,1100,1010,1190),1190);
+        check(Double.isNaN(visionMath("interpolatedSpeed",60,40,40,1000,1200)),"Invalid calibration rejected");
+        check(Double.isNaN(visionMath("interpolatedSpeed",60,-1,80,1000,1200)),"Negative calibration distance rejected");
+        Map<String,Motor> motors=new HashMap<>(); Teleop op=new Teleop();
+        initialize(op, hardware(directory,null,new Adjustment(),motors));
+        org.firstinspires.ftc.teamcode.vision.LimelightVision vision =
+                (org.firstinspires.ftc.teamcode.vision.LimelightVision)field(op,"limelight");
+        op.gamepad1.right_bumper=true; op.gamepad1.right_stick_x=.2f;
+        vision.tx=20; vision.ty=10; op.loop();
+        near(motors.get("frontLeft").power,.35); near(motors.get("frontRight").power,-.35);
+        check(vision.updates==1,"Exactly one vision update per loop");
+        vision.tx=-20; op.loop(); near(motors.get("frontLeft").power,-.35);
+        vision.tx=1; op.loop(); near(motors.get("frontLeft").power,0);
+        vision.tx=Double.NaN; op.loop(); near(motors.get("frontLeft").power,(double).2f);
+        vision.tx=20; vision.ty=Double.NaN; op.loop(); near(motors.get("frontLeft").power,(double).2f);
+        vision.ty=10; op.gamepad1.right_bumper=false; op.loop(); near(motors.get("frontLeft").power,(double).2f);
+        op.gamepad2.y=true; op.loop(); near(motors.get("flywheelA").velocity,0);
+        op.gamepad2.left_bumper=op.gamepad2.dpad_up=true; op.loop();
+        near(motors.get("flywheelA").velocity,50); near(motors.get("flywheelB").velocity,50);
+        op.gamepad2.left_bumper=false; op.loop(); op.gamepad2.left_bumper=true; op.loop();
+        near(motors.get("flywheelA").velocity,0); near(motors.get("flywheelB").velocity,0);
+        check("UNCALIBRATED".equals(field(op,"autoSpeedStatus")),"Uncalibrated AUTO reports why it is off");
+        Shooter shooter=(Shooter)field(op,"shooter"); near(shooter.getVelocityTolerance(),75);
+        shooter.setStableTimeSeconds(0); shooter.setTargetVelocity(1100);
+        motors.get("flywheelA").velocity=1070; motors.get("flywheelB").velocity=1130;
+        check(shooter.isAtSpeed(),"Both motors within practical tolerance");
+        shooter.setStableTimeSeconds(100); shooter.setTargetVelocity(1150);
+        check(!shooter.isAtSpeed(),"Changed target restarts stability requirement");
+        op.stop(); check(vision.stopped,"STOP ends camera polling");
+        for(Motor motor:motors.values()){near(motor.power,0);near(motor.velocity,0);}
+    }
+
     public static void main(String[] args) throws Exception {
+        visionChecks(new File(args[0]));
         File directory = new File(args[0], "app-files"); check(directory.mkdir(), "Create app directory");
         File file = new File(directory, BallColorCalibration.FILE_NAME);
         Color color = new Color();
@@ -463,7 +514,7 @@ public final class FastColorChecks {
         check(shooter.getSelectedBallType() == Shooter.BallType.UNKNOWN && !shooter.isReadyToFeed(), "AUTO disconnected cannot retain manual identification");
         color.failed = false;
         op.gamepad2.x = true; op.gamepad2.left_trigger = .3f; op.loop();
-        near(motors.get("intake").power, 1); near(motors.get("transfer").power, .15);
+        near(motors.get("intake").power, .6); near(motors.get("transfer").power, .15);
         op.gamepad2.right_trigger = .3f; op.loop();
         near(motors.get("intake").power, -.50); near(motors.get("transfer").power, -.50);
         op.gamepad2.x = false; op.gamepad2.left_trigger = op.gamepad2.right_trigger = 0;

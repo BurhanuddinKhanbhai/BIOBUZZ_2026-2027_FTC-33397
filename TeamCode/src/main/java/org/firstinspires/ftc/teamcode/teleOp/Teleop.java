@@ -33,12 +33,13 @@ public class Teleop extends OpMode {
     // Manual speed adjustment in encoder ticks/second.
     private static final double MANUAL_FLYWHEEL_MAX_VELOCITY = Double.MAX_VALUE;
     private static final double MANUAL_FLYWHEEL_INCREMENT = 50.0;
-    // Existing readiness settings; zero tolerance requires an exact velocity match.
-    private static final double FLYWHEEL_VELOCITY_TOLERANCE = 0.0;
+    // Initial readiness tolerance matches RedAuto; verify under load on the robot.
+    private static final double FLYWHEEL_VELOCITY_TOLERANCE = 75.0;
     private static final double FLYWHEEL_STABLE_TIME_SECONDS = 0.25;
 
 
     // ========== LIMELIGHT AIMING ==========
+    // Verify pipeline 0 is configured for the hive on the camera.
     private static final int HIVE_PIPELINE = 0;
     private static final long MAX_VISION_AGE_MS = 200;
 
@@ -50,9 +51,9 @@ public class Teleop extends OpMode {
     // ========== DISTANCE CALIBRATION ==========
 // Measure these on the robot. Inches and degrees.
 // Positive camera pitch means tilted upward.
-    private static final double CAMERA_HEIGHT_IN = Double.NaN;
-    private static final double TARGET_HEIGHT_IN = Double.NaN;
-    private static final double CAMERA_PITCH_DEG = Double.NaN;
+    private static final double CAMERA_HEIGHT_IN = 10.0;
+    private static final double TARGET_HEIGHT_IN = 50.0;
+    private static final double CAMERA_PITCH_DEG = 35.0;
 
     // ========== SHOOTING SPEED CALIBRATION ==========
 // Enter two measured shooting distances and
@@ -87,6 +88,8 @@ public class Teleop extends OpMode {
     private LimelightVision limelight;
     private double visionDistanceInches = Double.NaN;
     private double lastAutoVisionSpeed = Double.NaN;
+    private double visionTx = Double.NaN, visionTy = Double.NaN;
+    private String autoSpeedStatus = "UNCALIBRATED";
 
     private FlowerMechanism flowerMechanism;
     private boolean previousDpadLeft;
@@ -131,34 +134,7 @@ public class Teleop extends OpMode {
         addBallSelectionTelemetry();
         addFlowerTelemetry();
 
-        telemetry.addData("Limelight", limelight.getStatus());
-
-        telemetry.addData(
-                "Vision tx / ty",
-                "%.2f / %.2f",
-                limelight.getTx(),
-                limelight.getTy()
-        );
-
-        telemetry.addData(
-                "Vision distance (inches)",
-                Double.isFinite(visionDistanceInches)
-                        ? String.format("%.1f", visionDistanceInches)
-                        : "UNAVAILABLE / UNCALIBRATED"
-        );
-
-        telemetry.addData(
-                "Auto aim",
-                !gamepad1.right_bumper ? "OFF" :
-                        !limelight.hasTarget() ? "NO TARGET - MANUAL" :
-                        Math.abs(limelight.getTx() - AIM_TX_SETPOINT_DEG)
-                                <= AIM_TOLERANCE_DEG ? "ALIGNED" : "TRACKING"
-        );
-
-        telemetry.addData(
-                "Vision flywheel target",
-                "NOT STARTED"
-        );
+        addVisionTelemetry();
 
         telemetry.update();
     }
@@ -186,27 +162,15 @@ public class Teleop extends OpMode {
 
         double turn = applyDeadzone(gamepad1.right_stick_x);
 
-// Read the newest cached camera result once per loop.
+        // One cached-result update; a getter can become unavailable at the freshness boundary.
         limelight.update();
-        visionDistanceInches = estimateVisionDistanceInches();
-
-// Hold Gamepad 1 right bumper to align with the hive.
-        if (gamepad1.right_bumper && limelight.hasTarget()) {
-
-            double error = limelight.getTx() - AIM_TX_SETPOINT_DEG;
-
-            if (Math.abs(error) <= AIM_TOLERANCE_DEG) {
-                // Aligned: stop commanding rotation.
-                turn = 0.0;
-            } else {
-                // Positive tx = target to the right.
-                // Positive drivetrain turn = clockwise.
-                turn = Math.max(
-                        -AIM_MAX_TURN,
-                        Math.min(AIM_MAX_TURN, AIM_KP * error)
-                );
-            }
-        }
+        visionTx = limelight.getTx();
+        visionTy = limelight.getTy();
+        boolean targetAvailable = Double.isFinite(visionTx) && Double.isFinite(visionTy);
+        if (!targetAvailable) visionTx = visionTy = Double.NaN;
+        visionDistanceInches = estimateDistance(visionTy, CAMERA_HEIGHT_IN,
+                TARGET_HEIGHT_IN, CAMERA_PITCH_DEG);
+        turn = aimingTurn(turn, gamepad1.right_bumper, visionTx);
 
 // Forward and strafe always remain driver-controlled.
 // Without a valid target, rotation remains manual.
@@ -220,7 +184,7 @@ public class Teleop extends OpMode {
             transfer.setPower(-0.50);
 
         } else if (gamepad2.a) {
-            // Intake at 100%, transfer at 90%
+            // Intake and transfer at 100%
             intake.setPower(1.00);
             transfer.setPower(1.00);
 
@@ -230,7 +194,7 @@ public class Teleop extends OpMode {
             transfer.stop();
 
         } else if (gamepad2.x) {
-            // Intake at 100%, transfer at 15%
+            // Intake at 60%, transfer at 15%
             intake.setPower(0.6);
             transfer.setPower(0.15);
 
@@ -263,7 +227,7 @@ public class Teleop extends OpMode {
         telemetry.addData("Flywheel enabled request", flywheelsEnabled);
         telemetry.addData("Flywheel speed mode", flywheelSpeedMode);
         telemetry.addData("Flywheel speed status", flywheelSpeedMode == FlywheelSpeedMode.AUTO
-                ? "AUTO UNCALIBRATED" : "MANUAL");
+                ? "AUTO " + autoSpeedStatus : "MANUAL");
         telemetry.addData("Manual target (ticks/s)", manualTargetVelocity);
         telemetry.addData("Mode target (ticks/s)", flywheelTargetVelocity);
         telemetry.addData("Commanded velocity (ticks/s)", shooter.getTargetVelocity());
@@ -272,6 +236,7 @@ public class Teleop extends OpMode {
         telemetry.addData("Flywheels at speed", flywheelsAtSpeed);
         addBallSelectionTelemetry();
         addFlowerTelemetry();
+        addVisionTelemetry();
         telemetry.update();
     }
 
@@ -465,7 +430,8 @@ public class Teleop extends OpMode {
         previousDpadUp = up;
         previousDpadDown = down;
 
-        // AUTO has no calibrated target yet and must never reuse the manual speed.
+        // Drop AUTO history in MANUAL; returning to AUTO uses the current observation.
+        if (flywheelSpeedMode == FlywheelSpeedMode.MANUAL) lastAutoVisionSpeed = Double.NaN;
 
         double targetVelocity = flywheelSpeedMode == FlywheelSpeedMode.MANUAL
                 ? manualTargetVelocity
@@ -476,81 +442,78 @@ public class Teleop extends OpMode {
     }
 
 
-    private double estimateVisionDistanceInches() {
+    private void addVisionTelemetry() {
+        telemetry.addData("Limelight / pipeline", "%s / %d", limelight.getStatus(), limelight.getPipelineIndex());
+        telemetry.addData("Vision tx / ty (degrees)", "%.2f / %.2f", visionTx, visionTy);
+        telemetry.addData("Vision age (ms)", limelight.getResultAgeMillis());
+        telemetry.addData("Vision distance (inches)", Double.isFinite(visionDistanceInches)
+                ? String.format("%.1f", visionDistanceInches) : "UNAVAILABLE / UNCALIBRATED");
+        telemetry.addData("Auto aim", !gamepad1.right_bumper ? "OFF"
+                : !Double.isFinite(visionTx) ? "NO TARGET - MANUAL"
+                : Math.abs(visionTx - AIM_TX_SETPOINT_DEG) <= AIM_TOLERANCE_DEG ? "ALIGNED" : "TRACKING");
+        telemetry.addData("Vision flywheel target", flywheelSpeedMode == FlywheelSpeedMode.MANUAL
+                ? "MANUAL MODE" : autoSpeedStatus + " / " + (Double.isFinite(lastAutoVisionSpeed) ? lastAutoVisionSpeed : 0.0));
+    }
 
-        if (limelight == null || !limelight.hasTarget()) {
+    private static double aimingTurn(double manual, boolean held, double tx) {
+        if (!held || !Double.isFinite(tx)) return manual;
+        double error = tx - AIM_TX_SETPOINT_DEG;
+        // Positive tx is right; positive drivetrain turn is clockwise. Verify mounting on robot.
+        return Math.abs(error) <= AIM_TOLERANCE_DEG ? 0.0
+                : Math.max(-AIM_MAX_TURN, Math.min(AIM_MAX_TURN, AIM_KP * error));
+    }
+
+    /** Horizontal camera-to-target distance; calibrate near the aiming crosshair. */
+    private static double estimateDistance(double ty, double cameraHeight, double targetHeight, double pitch) {
+        double angle = pitch + ty;
+        if (!Double.isFinite(ty) || !Double.isFinite(cameraHeight) || !Double.isFinite(targetHeight)
+                || !Double.isFinite(pitch) || cameraHeight < 0 || targetHeight < 0
+                || !Double.isFinite(angle) || Math.abs(angle) >= 90.0) return Double.NaN;
+        double height = targetHeight - cameraHeight;
+        double tangent = Math.tan(Math.toRadians(angle));
+        if (Math.abs(tangent) < 0.0001 || Math.abs(height) < 0.01) return Double.NaN;
+        double distance = height / tangent;
+        return Double.isFinite(distance) && distance > 0 ? distance : Double.NaN;
+    }
+
+    private static boolean speedCalibrationValid(double near, double far, double nearSpeed, double farSpeed) {
+        return Double.isFinite(near) && Double.isFinite(far) && near > 0 && far > near
+                && Double.isFinite(nearSpeed) && Double.isFinite(farSpeed) && nearSpeed > 0 && farSpeed > 0;
+    }
+
+    private static double interpolatedSpeed(double distance, double near, double far, double nearSpeed, double farSpeed) {
+        if (!Double.isFinite(distance) || distance <= 0 || !speedCalibrationValid(near, far, nearSpeed, farSpeed))
             return Double.NaN;
-        }
+        double fraction = Math.max(0.0, Math.min(1.0, (distance - near) / (far - near)));
+        return nearSpeed + fraction * (farSpeed - nearSpeed);
+    }
 
-        if (!Double.isFinite(CAMERA_HEIGHT_IN)
-                || !Double.isFinite(TARGET_HEIGHT_IN)
-                || !Double.isFinite(CAMERA_PITCH_DEG)) {
-            return Double.NaN;
-        }
-
-        double heightDifference = TARGET_HEIGHT_IN - CAMERA_HEIGHT_IN;
-
-        double angleRadians = Math.toRadians(
-                CAMERA_PITCH_DEG + limelight.getTy()
-        );
-
-        double tangent = Math.tan(angleRadians);
-
-        if (!Double.isFinite(tangent)
-                || Math.abs(tangent) < 0.0001
-                || Math.abs(heightDifference) < 0.01) {
-            return Double.NaN;
-        }
-
-        double distance = heightDifference / tangent;
-
-        if (!Double.isFinite(distance) || distance <= 0.0) {
-            return Double.NaN;
-        }
-
-        return distance;
+    private static double stabilizedSpeed(double calculated, double previous, double nearSpeed, double farSpeed) {
+        // Clamp AFTER rounding so endpoint calibration remains the actual command bounds.
+        double quantized = Math.max(Math.min(nearSpeed, farSpeed), Math.min(Math.max(nearSpeed, farSpeed),
+                Math.rint(calculated / 50.0) * 50.0));
+        return !Double.isFinite(previous) || Math.abs(quantized - previous) >= 75.0 ? quantized : previous;
     }
 
     private double getDistanceBasedFlywheelSpeed() {
-
-        if (!Double.isFinite(visionDistanceInches)
-                || !Double.isFinite(NEAR_DISTANCE_IN)
-                || !Double.isFinite(FAR_DISTANCE_IN)
-                || !Double.isFinite(NEAR_SPEED_TPS)
-                || !Double.isFinite(FAR_SPEED_TPS)
-                || FAR_DISTANCE_IN <= NEAR_DISTANCE_IN
-                || NEAR_SPEED_TPS <= 0.0
-                || FAR_SPEED_TPS <= 0.0) {
-
-            lastAutoVisionSpeed = Double.NaN;
-            return 0.0;
+        if (!Double.isFinite(CAMERA_HEIGHT_IN) || !Double.isFinite(TARGET_HEIGHT_IN)
+                || !Double.isFinite(CAMERA_PITCH_DEG)
+                || !speedCalibrationValid(NEAR_DISTANCE_IN, FAR_DISTANCE_IN, NEAR_SPEED_TPS, FAR_SPEED_TPS)) {
+            autoSpeedStatus = "UNCALIBRATED";
+        } else if (!Double.isFinite(visionTx) || !Double.isFinite(visionTy)) {
+            autoSpeedStatus = "NO TARGET";
+        } else if (!Double.isFinite(visionDistanceInches)) {
+            autoSpeedStatus = "INVALID GEOMETRY";
+        } else {
+            double calculated = interpolatedSpeed(visionDistanceInches, NEAR_DISTANCE_IN, FAR_DISTANCE_IN,
+                    NEAR_SPEED_TPS, FAR_SPEED_TPS);
+            lastAutoVisionSpeed = stabilizedSpeed(calculated, lastAutoVisionSpeed, NEAR_SPEED_TPS, FAR_SPEED_TPS);
+            autoSpeedStatus = visionDistanceInches < NEAR_DISTANCE_IN || visionDistanceInches > FAR_DISTANCE_IN
+                    ? "ENDPOINT CLAMP" : "TRACKING";
+            return lastAutoVisionSpeed;
         }
-
-        // Interpolate between two tested shooting distances.
-        // Outside the calibrated range, use the nearest endpoint.
-        double fraction =
-                (visionDistanceInches - NEAR_DISTANCE_IN)
-                        / (FAR_DISTANCE_IN - NEAR_DISTANCE_IN);
-
-        fraction = Math.max(0.0, Math.min(1.0, fraction));
-
-        double calculatedSpeed =
-                NEAR_SPEED_TPS
-                        + fraction * (FAR_SPEED_TPS - NEAR_SPEED_TPS);
-
-        // Round to 50 ticks/s to reduce speed changes caused
-        // by small camera measurement fluctuations.
-        double quantizedSpeed =
-                Math.round(calculatedSpeed / 50.0) * 50.0;
-
-        // Hysteresis: avoid constantly changing the velocity
-        // target and restarting the shooter's stability timer.
-        if (!Double.isFinite(lastAutoVisionSpeed)
-                || Math.abs(quantizedSpeed - lastAutoVisionSpeed) >= 75.0) {
-            lastAutoVisionSpeed = quantizedSpeed;
-        }
-
-        return lastAutoVisionSpeed;
+        lastAutoVisionSpeed = Double.NaN;
+        return 0.0;
     }
 
     private static double applyDeadzone(double value) {

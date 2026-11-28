@@ -44,8 +44,14 @@ public abstract class OpMode {
     'com/qualcomm/robotcore/util/RobotLog.java': '''package com.qualcomm.robotcore.util;
 public class RobotLog { public static void ee(String tag,Throwable e,String text){throw new AssertionError(text,e);} }''',
     'org/firstinspires/ftc/teamcode/vision/LimelightVision.java': '''package org.firstinspires.ftc.teamcode.vision;
-public class LimelightVision { public void update(){} public boolean hasTarget(){return false;}
-public String getStatus(){return "NOT_CONFIGURED";} }''',
+public class LimelightVision {
+public double tx=Double.NaN,ty=Double.NaN; public int updates; public boolean stopped;
+public LimelightVision(com.qualcomm.robotcore.hardware.HardwareMap h,int p,long age){}
+public void start(){} public void stop(){stopped=true;} public void update(){updates++;}
+public boolean hasTarget(){return Double.isFinite(tx)&&Double.isFinite(ty);}
+public double getTx(){return tx;} public double getTy(){return ty;}
+public double getResultAgeMillis(){return 0;} public int getPipelineIndex(){return 0;}
+public String getStatus(){return hasTarget()?"TARGET":"NO_TARGET";} }''',
 }
 with tempfile.TemporaryDirectory(prefix='biobuzz-color-checks-') as directory:
     temp = Path(directory)
