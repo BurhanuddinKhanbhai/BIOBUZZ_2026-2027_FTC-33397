@@ -36,7 +36,7 @@ public final class RedAutoPlan {
         DRIVE_TO_SHOOT_2  (-100.0, 0.0,   0.0, 1.00, 1.0, 0.0),
         TURN_RIGHT_70_1   (  0.0,  0.0,  30.0, 1.00, 5.0, 0.0),
         SHOOT_2           (  0.0,  0.0,   0.0, 0.00, 0.0, 4.0),
-        PARK_BACKWARD      (5.0, -10.0,    0.0, 1.00, 1.0, 0.0);
+        PARK_BACKWARD      (9.0, -20.0,    0.0, 1.00, 1.0, 0.0);
 
         private final double forwardInches;
         private final double leftInches;
