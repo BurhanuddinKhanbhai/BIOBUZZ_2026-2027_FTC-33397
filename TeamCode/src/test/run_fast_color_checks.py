@@ -50,6 +50,14 @@ public LimelightVision(com.qualcomm.robotcore.hardware.HardwareMap h,int p,long 
 public void start(){} public void stop(){stopped=true;} public void update(){updates++;}
 public boolean hasTarget(){return Double.isFinite(tx)&&Double.isFinite(ty);}
 public double getTx(){return tx;} public double getTy(){return ty;}
+public int getSelectedTagId(){return hasTarget()?30:-1;} public double getTa(){return hasTarget()?1:Double.NaN;}
+public boolean isAvailable(){return true;} public boolean isConnected(){return true;} public boolean isRunning(){return !stopped;}
+public boolean isPipelineSelected(){return true;} public int getResultPipelineIndex(){return 0;}
+public String getResultPipelineType(){return "fiducial";} public boolean hasResult(){return true;}
+public boolean isResultValid(){return hasTarget();} public int getFiducialCount(){return hasTarget()?1:0;}
+public String getVisibleTagIds(){return hasTarget()?"[30]":"[]";} public boolean isFresh(){return true;}
+public double getFrameTimestamp(){return 1;} public String getValidationDetails(){return "MOCK";}
+
 public double getResultAgeMillis(){return 0;} public int getPipelineIndex(){return 0;}
 public String getStatus(){return hasTarget()?"TARGET":"NO_TARGET";} }''',
 }

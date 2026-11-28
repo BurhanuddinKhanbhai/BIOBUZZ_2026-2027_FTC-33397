@@ -5,6 +5,7 @@ import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.hardware.limelightvision.LLResultTypes;
 
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -24,6 +25,30 @@ public class LimelightVision {
     private int resultPipelineIndex = -1;
 
     private int selectedTagId = -1;
+    private int fiducialCount;
+    private String visibleTagIds = "[]";
+    private String resultPipelineType = "UNKNOWN";
+    private String measurementStatus = "NO_RESULT";
+    private String validationDetails = "No result";
+    private double cameraTimestamp = Double.NaN;
+    private boolean rawValidityConfirmed;
+    private boolean emptyResult;
+
+    /** Diagnostics describe the current cached result, even if it cannot be used for aiming. */
+    public boolean hasResult() { return result != null; }
+    public boolean isResultValid() { return result != null && result.isValid(); }
+    public boolean isPipelineSelected() { return pipelineSelected; }
+    public int getResultPipelineIndex() { return result == null ? -1 : resultPipelineIndex; }
+    public String getResultPipelineType() { return result == null ? "UNKNOWN" : resultPipelineType; }
+    public int getFiducialCount() { return result == null ? 0 : fiducialCount; }
+    public String getVisibleTagIds() { return result == null ? "[]" : visibleTagIds; }
+    public String getValidationDetails() { return result == null ? "No result" : validationDetails; }
+    public double getFrameTimestamp() { return result == null ? Double.NaN : cameraTimestamp; }
+    public boolean isFresh() {
+        double age = getResultAgeMillis();
+        return isFinite(age) && age >= 0.0 && age <= maxResultAgeMillis;
+    }
+
 
     public int getSelectedTagId() {
         return hasTarget() ? selectedTagId : -1;
@@ -91,7 +116,7 @@ public class LimelightVision {
                 return;
             }
             validateMeasurements(result);
-            double timestamp = result.getTimestamp();
+            double timestamp = cameraTimestamp;
             long age = result.getStaleness();
             if (isFinite(timestamp) && timestamp > 0.0 && age >= 0 && timestamp != frameTimestamp) {
                 frameTimestamp = timestamp;
@@ -107,7 +132,7 @@ public class LimelightVision {
 
     /** Rechecks freshness/connection on every call, including between update() calls. */
     public boolean hasTarget() {
-        return "TARGET".equals(getStatus());
+        return "TARGET_DETECTED".equals(getStatus());
     }
 
     /** Horizontal offset from the configured crosshair in degrees, or NaN if unavailable. */
@@ -182,7 +207,7 @@ public class LimelightVision {
             return Double.NaN;
         }
         long receivedAge = result.getStaleness();
-        if (receivedAge < 0 || !isFinite(result.getTimestamp()) || result.getTimestamp() <= 0.0) {
+        if (receivedAge < 0 || !isFinite(cameraTimestamp) || cameraTimestamp <= 0.0) {
             return Double.NaN;
         }
         double observedAge = frameInitialAgeMillis
@@ -207,28 +232,16 @@ public class LimelightVision {
         if (result == null) {
             return status;
         }
-        if (!result.isValid()) {
-            return "NO_TARGET";
-        }
-        if (resultPipelineIndex < 0) {
-            return "INVALID_RESULT";
-        }
-        if (resultPipelineIndex != pipelineIndex) {
-            return "PIPELINE_MISMATCH";
-        }
-        if (!isFinite(result.getTimestamp()) || result.getTimestamp() <= 0.0
-                || !isFinite(targetTx) || !isFinite(targetTy)
-                || !isFinite(targetTa) || targetTa < 0.0 || targetTa > 100.0) {
-            return "INVALID_RESULT";
-        }
-        if (waitingForNewFrame) {
-            return "WAITING_FOR_NEW_FRAME";
-        }
+        if (emptyResult) return "EMPTY_RESULT"; // SDK can return {} instead of null before first data.
+        if (!rawValidityConfirmed || !result.isValid()) return "INVALID_RESULT";
+        if (resultPipelineIndex < 0) return "INVALID_PIPELINE_METADATA";
+        if (resultPipelineIndex != pipelineIndex) return "WRONG_PIPELINE";
+        if (!isFinite(cameraTimestamp) || cameraTimestamp <= 0.0) return "INVALID_TIMESTAMP";
+        if (waitingForNewFrame) return "WAITING_FOR_NEW_FRAME";
         double age = getResultAgeMillis();
-        if (!isFinite(age) || age < 0.0) {
-            return "INVALID_RESULT";
-        }
-        return age <= maxResultAgeMillis ? "TARGET" : "STALE";
+        if (!isFinite(age) || age < 0.0) return "INVALID_TIMESTAMP";
+        if (age > maxResultAgeMillis) return "STALE_RESULT";
+        return measurementStatus;
     }
 
     /**
@@ -238,72 +251,82 @@ public class LimelightVision {
      */
 
     private void validateMeasurements(LLResult latest) {
-        if (latest == validatedResult) {
-            return;
-        }
-
+        if (latest == validatedResult) return;
         validatedResult = latest;
-        targetTx = Double.NaN;
-        targetTy = Double.NaN;
-        targetTa = Double.NaN;
-        resultPipelineIndex = -1;
-        selectedTagId = -1;
-
+        targetTx = targetTy = targetTa = Double.NaN;
+        resultPipelineIndex = selectedTagId = -1;
+        cameraTimestamp = Double.NaN;
+        rawValidityConfirmed = emptyResult = false;
+        resultPipelineType = "UNKNOWN";
+        measurementStatus = "INVALID_MEASUREMENTS";
+        validationDetails = "Invalid JSON";
+        // Read SDK detections even when v is false, to distinguish metadata from detection failure.
+        java.util.List<LLResultTypes.FiducialResult> tags = latest.getFiducialResults();
+        fiducialCount = tags == null ? 0 : tags.size();
+        StringBuilder ids = new StringBuilder("[");
+        if (tags != null) for (LLResultTypes.FiducialResult tag : tags) {
+            if (ids.length() > 1) ids.append(", ");
+            ids.append(tag.getFiducialId());
+        }
+        visibleTagIds = ids.append("]").toString();
         try {
+            // SDK 11.1.0 toString() is the top-level /results JSON, not a Results envelope.
             JSONObject json = new JSONObject(latest.toString());
+            emptyResult = json.length() == 0;
+            rawValidityConfirmed = getFiniteNumber(json, "v") == 1.0;
+            cameraTimestamp = getFiniteNumber(json, "ts");
             double pipeline = getFiniteNumber(json, "pID");
+            if (isFinite(pipeline) && pipeline >= 0 && pipeline <= Integer.MAX_VALUE
+                    && pipeline == Math.rint(pipeline)) resultPipelineIndex = (int) pipeline;
+            Object type = json.opt("pipelineType");
+            if (type instanceof String && !((String) type).isEmpty()) resultPipelineType = (String) type;
 
-            if (!isFinite(pipeline)
-                    || pipeline < 0
-                    || pipeline > Integer.MAX_VALUE
-                    || pipeline != Math.rint(pipeline)) {
-                return;
-            }
-
-            resultPipelineIndex = (int) pipeline;
-
-            if (latest.getFiducialResults() == null) {
-                return;
-            }
-
-            double closestOffset = Double.POSITIVE_INFINITY;
-
-            for (LLResultTypes.FiducialResult tag
-                    : latest.getFiducialResults()) {
-
-                int id = tag.getFiducialId();
-
-                // Accept scoring AprilTags from either alliance.
-                if (id < 30 || id > 45) {
-                    continue;
+            JSONArray rawTags = json.optJSONArray("Fiducial");
+            int allowed = 0, malformed = 0;
+            double closest = Double.POSITIVE_INFINITY;
+            if (rawTags != null) for (int i = 0; i < rawTags.length(); i++) {
+                JSONObject tag = rawTags.optJSONObject(i);
+                if (tag == null) { malformed++; continue; }
+                double id = getFiniteNumber(tag, "fID");
+                if (!isFinite(id) || id != Math.rint(id)) { malformed++; continue; }
+                if (id < 30 || id > 45) continue;
+                allowed++;
+                // Fiducial SDK getters substitute zero for missing fields. Validate RAW evidence.
+                double tx = getFiniteNumber(tag, "tx"), ty = getFiniteNumber(tag, "ty");
+                double ta = getFiniteNumber(tag, "ta");
+                if (!isFinite(tx) || !isFinite(ty) || !isFinite(ta) || ta < 0 || ta > 100) {
+                    malformed++; continue;
                 }
-
-                double tx = tag.getTargetXDegrees();
-                double ty = tag.getTargetYDegrees();
-                double ta = tag.getTargetArea();
-
-                if (!isFinite(tx) || !isFinite(ty)
-                        || !isFinite(ta)
-                        || ta < 0 || ta > 100) {
-                    continue;
-                }
-
-                // Pick the visible tag nearest the crosshair.
-                if (Math.abs(tx) < closestOffset) {
-                    closestOffset = Math.abs(tx);
-
-                    selectedTagId = id;
-                    targetTx = tx;
-                    targetTy = ty;
-                    targetTa = ta;
+                double offset = Math.hypot(tx, ty);
+                if (offset < closest) {
+                    closest = offset;
+                    selectedTagId = (int) id;
+                    targetTx = tx; targetTy = ty; targetTa = ta;
                 }
             }
-
+            if (rawTags == null) measurementStatus = json.has("Fiducial") ? "INVALID_MEASUREMENTS" : "NO_FIDUCIALS";
+            else if (rawTags.length() == 0) measurementStatus = "NO_FIDUCIALS";
+            else if (selectedTagId >= 0) measurementStatus = "TARGET_DETECTED";
+            else if (allowed > 0 || malformed > 0) measurementStatus = "INVALID_MEASUREMENTS";
+            else measurementStatus = "NO_ALLOWED_TAG";
+            validationDetails = "v=" + describe(json, "v") + " pID=" + describe(json, "pID")
+                    + " ts=" + describe(json, "ts") + " root tx/ty/ta=" + describe(json, "tx")
+                    + "/" + describe(json, "ty") + "/" + describe(json, "ta")
+                    + " Fiducial=" + (rawTags == null ? describe(json, "Fiducial") : rawTags.length())
+                    + " allowed=" + allowed + " malformed=" + malformed
+                    + " candidate=" + selectedTagId + " selection=" + measurementStatus;
         } catch (JSONException e) {
-            // Keep measurements invalid if metadata cannot be parsed.
+            // Cached invalid result: no repeated JSON parsing or guessed measurement values.
         }
     }
 
+    private static String describe(JSONObject json, String key) {
+        if (!json.has(key)) return "MISSING";
+        Object value = json.opt(key);
+        if (value == null || value == JSONObject.NULL) return "NULL";
+        String text = String.valueOf(value);
+        return value.getClass().getSimpleName() + ":" + (text.length() > 40 ? text.substring(0, 40) : text);
+    }
 
     private static double getFiniteNumber(JSONObject json, String key) {
         Object value = json.opt(key);

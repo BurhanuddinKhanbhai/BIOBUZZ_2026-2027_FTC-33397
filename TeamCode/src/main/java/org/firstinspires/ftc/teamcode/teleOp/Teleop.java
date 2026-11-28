@@ -43,6 +43,8 @@ public class Teleop extends OpMode {
     private static final int HIVE_PIPELINE = 0;
     private static final long MAX_VISION_AGE_MS = 200;
 
+    // Enable only after physical verification of direction, alignment, selection and controller.
+    private static final boolean AUTO_AIM_ENABLED = false;
     private static final double AIM_KP = 0.020;
     private static final double AIM_MAX_TURN = 0.35;
     private static final double AIM_TOLERANCE_DEG = 1.5;
@@ -444,15 +446,25 @@ public class Teleop extends OpMode {
 
     private void addVisionTelemetry() {
         telemetry.addData("Limelight / pipeline", "%s / %d", limelight.getStatus(), limelight.getPipelineIndex());
+        telemetry.addData("Vision hardware / connected / running", "%s / %s / %s",
+                limelight.isAvailable(), limelight.isConnected(), limelight.isRunning());
+        telemetry.addData("Vision pipeline switched / reported / type", "%s / %d / %s",
+                limelight.isPipelineSelected(), limelight.getResultPipelineIndex(), limelight.getResultPipelineType());
+        telemetry.addData("Vision result present / SDK valid", "%s / %s", limelight.hasResult(), limelight.isResultValid());
+        telemetry.addData("Vision fiducials / IDs", "%d / %s", limelight.getFiducialCount(), limelight.getVisibleTagIds());
+        telemetry.addData("Vision fresh / timestamp", "%s / %.3f", limelight.isFresh(), limelight.getFrameTimestamp());
+        telemetry.addData("Vision raw diagnostics", limelight.getValidationDetails());
         telemetry.addData("AprilTag ID",
                 limelight.getSelectedTagId() == -1
                         ? "NONE"
                         : limelight.getSelectedTagId());
         telemetry.addData("Vision tx / ty (degrees)", "%.2f / %.2f", visionTx, visionTy);
+        telemetry.addData("Selected tag area (%)", limelight.getTa());
         telemetry.addData("Vision age (ms)", limelight.getResultAgeMillis());
         telemetry.addData("Vision distance (inches)", Double.isFinite(visionDistanceInches)
                 ? String.format("%.1f", visionDistanceInches) : "UNAVAILABLE / UNCALIBRATED");
-        telemetry.addData("Auto aim", !gamepad1.right_bumper ? "OFF"
+        telemetry.addData("Auto aim", !AUTO_AIM_ENABLED ? "DISABLED - DIAGNOSTICS ONLY / MANUAL ROTATION"
+                : !gamepad1.right_bumper ? "OFF"
                 : !Double.isFinite(visionTx) ? "NO TARGET - MANUAL"
                 : Math.abs(visionTx - AIM_TX_SETPOINT_DEG) <= AIM_TOLERANCE_DEG ? "ALIGNED" : "TRACKING");
         telemetry.addData("Vision flywheel target", flywheelSpeedMode == FlywheelSpeedMode.MANUAL
@@ -460,7 +472,7 @@ public class Teleop extends OpMode {
     }
 
     private static double aimingTurn(double manual, boolean held, double tx) {
-        if (!held || !Double.isFinite(tx)) return manual;
+        if (!AUTO_AIM_ENABLED || !held || !Double.isFinite(tx)) return manual;
         double error = tx - AIM_TX_SETPOINT_DEG;
         // Positive tx is right; positive drivetrain turn is clockwise. Verify mounting on robot.
         return Math.abs(error) <= AIM_TOLERANCE_DEG ? 0.0
