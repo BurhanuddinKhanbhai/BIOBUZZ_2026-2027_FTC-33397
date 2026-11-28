@@ -17,7 +17,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 
-/** Robot-centric driving on Gamepad 1 and mechanism controls on Gamepad 2. */
+/** Robot-centric dr iving on Gamepad 1 and mechanism controls on Gamepad 2. */
 @TeleOp(name = "BIOBUZZ TeleOp", group = "Competition")
 public class Teleop extends OpMode {
     // Competition drive scales.
